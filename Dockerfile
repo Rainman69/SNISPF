@@ -1,7 +1,7 @@
 FROM python:3.12-slim
 
-LABEL maintainer="patterniha"
-LABEL description="SNI-Spoofing CLI - Cross-platform DPI bypass tool"
+LABEL maintainer="Rainman69"
+LABEL description="SNISPF - Cross-platform DPI bypass tool"
 
 WORKDIR /app
 
@@ -16,5 +16,5 @@ RUN pip install --no-cache-dir -e .
 
 EXPOSE 40443
 
-ENTRYPOINT ["sni-spoofing"]
+ENTRYPOINT ["snispf"]
 CMD ["--config", "config.json"]

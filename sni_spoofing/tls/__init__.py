@@ -1,8 +1,7 @@
 """TLS ClientHello builder and parser module.
 
 Constructs TLS 1.3 ClientHello messages with customizable SNI fields
-for DPI bypass purposes. Faithfully reproduces the packet structure
-from the original patterniha tool.
+for DPI bypass purposes.
 """
 
 import struct
