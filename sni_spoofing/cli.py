@@ -2,6 +2,7 @@
 SNISPF - Cross-platform SNI spoofing and DPI bypass tool.
 
 Works on Windows, macOS, and Linux without requiring kernel drivers.
+On Linux with root, enables raw packet injection for the seq_id trick.
 
 Usage:
     snispf --config config.json
@@ -28,6 +29,8 @@ from sni_spoofing.bypass import (
     CombinedBypass,
     FakeSNIBypass,
     FragmentBypass,
+    RawInjector,
+    is_raw_available,
 )
 from sni_spoofing.forwarder import start_server
 from sni_spoofing.utils import (
@@ -140,12 +143,13 @@ def generate_config(output_path: str):
 
 # ─── Strategy Builder ────────────────────────────────────────────────────────
 
-def build_strategy(config: dict) -> BypassStrategy:
+def build_strategy(config: dict, raw_injector=None) -> BypassStrategy:
     """Build the appropriate bypass strategy from config.
 
     Available methods:
     - "fragment": Fragment TLS ClientHello at SNI boundary
-    - "fake_sni": Send fake ClientHello with spoofed SNI
+    - "fake_sni": Send fake ClientHello with spoofed SNI (needs raw sockets
+      for the seq_id trick; falls back to fragmentation without them)
     - "combined": Both fragmentation and fake SNI (recommended)
     """
     method = config.get("BYPASS_METHOD", "fragment").lower()
@@ -158,12 +162,14 @@ def build_strategy(config: dict) -> BypassStrategy:
     elif method == "fake_sni":
         return FakeSNIBypass(
             method=config.get("FAKE_SNI_METHOD", "prefix_fake"),
+            raw_injector=raw_injector,
         )
     elif method == "combined":
         return CombinedBypass(
             fragment_strategy=config.get("FRAGMENT_STRATEGY", "sni_split"),
             use_ttl_trick=config.get("USE_TTL_TRICK", False),
             fragment_delay=config.get("FRAGMENT_DELAY", 0.1),
+            raw_injector=raw_injector,
         )
     else:
         print(f"Warning: Unknown bypass method '{method}', using 'fragment'")
@@ -191,7 +197,7 @@ def parse_args():
             "  %(prog)s --generate-config my_config.json\n"
             "\nBypass Methods:\n"
             "  fragment   - Fragment TLS ClientHello at SNI boundary (default)\n"
-            "  fake_sni   - Send fake ClientHello with spoofed SNI\n"
+            "  fake_sni   - Inject fake ClientHello (needs root for seq_id trick)\n"
             "  combined   - Both fragmentation and fake SNI (most effective)\n"
             "\nFragment Strategies (for fragment/combined methods):\n"
             "  sni_split        - Split in middle of SNI value (default)\n"
@@ -252,6 +258,11 @@ def parse_args():
         action="store_true",
         help="Use IP TTL trick for fake packets (may need privileges)",
     )
+    parser.add_argument(
+        "--no-raw",
+        action="store_true",
+        help="Disable raw socket injection even if available",
+    )
 
     # Output settings
     parser.add_argument(
@@ -298,6 +309,10 @@ def parse_host_port(addr: str, default_host: str = "0.0.0.0", default_port: int 
 def show_platform_info():
     """Display platform capability information."""
     caps = check_platform_capabilities()
+
+    # Also check raw injection availability
+    caps["raw_injection"] = is_raw_available()
+
     print("\n╔══════════════════════════════════════════╗")
     print("║       Platform Capabilities              ║")
     print("╠══════════════════════════════════════════╣")
@@ -307,16 +322,19 @@ def show_platform_info():
     print("╚══════════════════════════════════════════╝")
 
     print("\nRecommended bypass methods for your platform:")
-    if caps["raw_socket"]:
+    if caps["raw_injection"]:
+        print("  ✓ Raw packet injection available (running as root)")
+        print("  ★ Recommended: combined (uses seq_id trick + fragmentation)")
+        print("  ★ Also good:   fake_sni (uses seq_id trick)")
+    elif caps["raw_socket"]:
         print("  ✓ All methods available (running with sufficient privileges)")
         print("  ★ Recommended: combined --ttl-trick")
     else:
         print("  ✓ fragment    - TLS ClientHello fragmentation")
-        print("  ✓ fake_sni    - Fake SNI prefix method")
-        print("  ✓ combined    - Both (without TTL trick)")
-        print("  ★ Recommended: combined")
+        print("  ✓ combined    - Fragmentation (fake_sni needs root for seq_id)")
+        print("  ★ Recommended: fragment or combined")
         if platform.system() != "Windows":
-            print("  ℹ  Run with sudo/root for TTL trick support")
+            print("  ℹ  Run with sudo/root for raw injection (seq_id trick)")
 
 
 # ─── Main ────────────────────────────────────────────────────────────────────
@@ -389,8 +407,40 @@ def main():
     interface_ip = get_default_interface_ipv4(config["CONNECT_IP"])
     logger.info(f"Default interface: {interface_ip or 'auto'}")
 
+    # Try to start raw injector (Linux + root only)
+    raw_injector = None
+    use_raw = not getattr(args, 'no_raw', False)
+    method = config.get("BYPASS_METHOD", "fragment").lower()
+
+    if use_raw and method in ("fake_sni", "combined") and interface_ip:
+        if is_raw_available():
+            from sni_spoofing.bypass.raw_injector import RawInjector
+            raw_injector = RawInjector(
+                local_ip=interface_ip,
+                remote_ip=config["CONNECT_IP"],
+                remote_port=config["CONNECT_PORT"],
+                fake_sni_builder=None,
+            )
+            if not raw_injector.start():
+                logger.warning(
+                    "Raw injector failed to start. "
+                    "Falling back to fragmentation."
+                )
+                raw_injector = None
+        else:
+            if method == "fake_sni":
+                logger.warning(
+                    "Raw sockets not available (need root/CAP_NET_RAW). "
+                    "fake_sni will fall back to fragmentation."
+                )
+            elif method == "combined":
+                logger.info(
+                    "Raw sockets not available. "
+                    "Using fragmentation-only bypass."
+                )
+
     # Build bypass strategy
-    strategy = build_strategy(config)
+    strategy = build_strategy(config, raw_injector=raw_injector)
 
     # Show configuration summary
     logger.info(f"Platform: {platform.system()} {platform.machine()}")
@@ -399,6 +449,8 @@ def main():
     # Setup signal handlers for graceful shutdown
     def signal_handler(sig, frame):
         print("\n\nShutting down...")
+        if raw_injector:
+            raw_injector.stop()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
@@ -416,6 +468,7 @@ def main():
                 fake_sni=config["FAKE_SNI"],
                 bypass_strategy=strategy,
                 interface_ip=interface_ip,
+                raw_injector=raw_injector,
             )
         )
     except KeyboardInterrupt:
@@ -433,6 +486,9 @@ def main():
         else:
             print(f"\nError: {e}")
         sys.exit(1)
+    finally:
+        if raw_injector:
+            raw_injector.stop()
 
 
 if __name__ == "__main__":

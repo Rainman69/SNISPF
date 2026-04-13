@@ -258,6 +258,7 @@ usage: snispf [-h] [--config CONFIG] [--generate-config PATH]
 | `--fragment-strategy` | | How to fragment: `sni_split`, `half`, `multi`, `tls_record_frag` |
 | `--fragment-delay` | | Seconds to wait between fragments |
 | `--ttl-trick` | | Enable TTL trick (needs elevated privileges) |
+| `--no-raw` | | Disable raw socket injection even if available |
 | `--verbose` | `-v` | Show detailed debug output |
 | `--quiet` | `-q` | Only show warnings and errors |
 | `--version` | `-V` | Print version and exit |
@@ -282,23 +283,36 @@ SNISPF:   [Piece 1: ...SN]          --> Firewall sees incomplete name
 
 ### `fake_sni`
 
-Sends a decoy hello message with an allowed website name before sending the real one.
+Injects a decoy hello message with an allowed website name that DPI parses, but the server drops.
 
-**Best for:** When fragmentation alone doesn't work.
+**Best for:** When fragmentation alone doesn't work. Most effective with root/admin.
+
+**With root (Linux):** Uses raw socket injection to send the fake ClientHello with a TCP sequence number that falls outside the server's receive window. DPI sees it and whitelists the connection. The server drops it because the sequence number is out of range. This is the same technique used by the [original patterniha tool](https://github.com/patterniha/SNI-Spoofing).
+
+**Without root:** Falls back to fragmenting the real ClientHello (same as `fragment` method). Sending a fake ClientHello on the same TCP stream would corrupt the TLS handshake, so we don't do that.
 
 ```
-Step 1:   [Fake hello: SNI=allowed-site.com]  --> Firewall allows it
-Step 2:   [Real hello: SNI=blocked-site.com]   --> Firewall already decided
+With root:    [Fake hello: seq=out-of-window]    --> DPI sees it, server drops it
+              [Real hello: seq=normal]            --> Server processes, DPI ignores
+
+Without root: Falls back to fragment method
 ```
 
 ### `combined` (strongest)
 
-Uses both methods at the same time: sends a fake hello first, then sends the real hello in fragments.
+Uses both methods at the same time: injects a fake hello (if root is available), then sends the real hello in fragments.
 
 **Best for:** Aggressive DPI systems. This is the most effective option.
 
+**With root:** Injects the fake via raw socket (out-of-window seq trick) and fragments the real ClientHello. Hits DPI from two angles simultaneously.
+
+**Without root:** Fragments only (the fake injection is skipped since it can't be done safely without raw sockets).
+
 ```bash
 snispf -l :40443 -c 188.114.98.0:443 -s dl.google.com -m combined
+
+# On Linux, run with sudo for the full seq_id trick:
+sudo snispf -l :40443 -c 188.114.98.0:443 -s dl.google.com -m combined
 ```
 
 ---
@@ -311,7 +325,7 @@ These control *how* the hello message gets split up (used by `fragment` and `com
 |---|---|---|
 | `sni_split` | Cuts right through the middle of the website name. | Default and most effective for most firewalls. |
 | `half` | Cuts the entire message in half. | Simple fallback if `sni_split` doesn't work. |
-| `multi` | Chops into many tiny 5-byte pieces. | For firewalls that try to reassemble two fragments. |
+| `multi` | Chops into many small 24-byte pieces. | For firewalls that try to reassemble two fragments. |
 | `tls_record_frag` | Creates multiple valid TLS records from one message. | For firewalls that understand TLS but don't handle multi-record. |
 
 Example:
@@ -327,12 +341,12 @@ snispf -l :40443 -c 188.114.98.0:443 -s auth.vercel.com --fragment-strategy mult
 | Platform | Works? | Notes |
 |---|---|---|
 | Windows 10 / 11 | Yes | No admin needed for basic methods |
-| Linux (Ubuntu, Debian, Fedora, Arch, etc.) | Yes | Use `sudo` for TTL trick |
-| macOS | Yes | Use `sudo` for TTL trick |
+| Linux (Ubuntu, Debian, Fedora, Arch, etc.) | Yes | Use `sudo` for raw injection (seq_id trick) |
+| macOS | Yes | Fragmentation and TTL trick only (no `AF_PACKET`) |
 | Android (Termux) | Yes | Install Python first: `pkg install python` |
 | WSL / WSL2 | Yes | Works like native Linux |
 
-All bypass methods work in userspace using standard socket options (`TCP_NODELAY`, `IP_TTL`). No kernel drivers or raw sockets needed for the basic methods.
+The `fragment` method works everywhere using standard socket options (`TCP_NODELAY`). The `fake_sni` and `combined` methods are most effective on Linux with root, where they use `AF_PACKET` raw sockets to inject fake packets with out-of-window TCP sequence numbers. Without root, they fall back to fragmentation.
 
 ---
 
@@ -386,6 +400,16 @@ The TTL trick needs elevated privileges:
 
 - **Linux / macOS:** Run with `sudo`
 - **Windows:** Run the terminal as Administrator
+
+On Linux, consider using `combined` or `fake_sni` with `sudo` instead. The raw injection method (seq_id trick) is more reliable than the TTL trick because it's independent of network topology.
+
+### How do I get the strongest bypass?
+
+On Linux, run as root. This enables raw packet injection which is the same technique as the original [patterniha tool](https://github.com/patterniha/SNI-Spoofing):
+
+```bash
+sudo snispf -l :40443 -c 188.114.98.0:443 -s auth.vercel.com -m combined
+```
 
 ### How do I check what my system supports?
 
@@ -450,8 +474,9 @@ SNISPF/
 │   │   ├── __init__.py         # Exports all strategies
 │   │   ├── base.py             # Abstract base class for strategies
 │   │   ├── fragment.py         # TLS fragmentation bypass
-│   │   ├── fake_sni.py         # Fake SNI bypass
-│   │   └── combined.py         # Combined (fragment + fake SNI) bypass
+│   │   ├── fake_sni.py         # Fake SNI bypass (with raw injection support)
+│   │   ├── combined.py         # Combined (fragment + fake SNI) bypass
+│   │   └── raw_injector.py     # AF_PACKET raw injection (seq_id trick)
 │   ├── tls/                    # TLS packet handling
 │   │   ├── __init__.py         # ClientHello builder and parser
 │   │   └── fragment.py         # TLS record fragmentation logic
@@ -486,6 +511,17 @@ python -m unittest tests.test_tls -v
 
 ## Changelog
 
+### v1.1.0
+
+- **Fixed the seq_id problem** with `fake_sni` and `combined` methods. The old code sent the fake ClientHello as regular data on the same TCP stream, which the server would receive and try to parse as a real TLS record. This corrupted the handshake every time. Now on Linux with root, SNISPF uses `AF_PACKET` raw socket injection to send the fake ClientHello with an out-of-window TCP sequence number (`seq = ISN + 1 - len(fake)`). DPI parses it and whitelists the connection; the server drops it because the sequence number falls before its receive window. This is the same technique used by [patterniha's original tool](https://github.com/patterniha/SNI-Spoofing) and [the Go reimplementation](https://github.com/selfishblackberry177/sni-spoof).
+- **Fixed `fake_sni` without raw sockets.** Previously it would send the fake ClientHello on the real TCP stream, breaking the TLS handshake. Now it falls back to fragmenting the real ClientHello at the SNI boundary instead of corrupting the connection.
+- **Fixed `combined` without raw sockets.** Same issue -- no longer sends junk data on the real TCP stream. Falls back to fragmentation-only.
+- **Fixed the `multi` fragment strategy timeout.** The old 5-byte chunk size produced 100+ fragments with 0.1s delay each, causing a 10+ second stall before the handshake could even complete. Bumped to 24-byte chunks (~22 fragments), which keeps the fragment count reasonable while still splitting the SNI across multiple packets.
+- Added `raw_injector.py`: the raw packet sniffer and injector module. Monitors the TCP handshake via `AF_PACKET`, captures the SYN ISN and the 3rd ACK template, injects the fake ClientHello 1ms after the handshake completes, and confirms the server ignored it by watching for an ACK with `ack == ISN + 1`.
+- Added `--no-raw` CLI flag to disable raw socket injection even when running as root.
+- Platform capability detection now reports `af_packet` and `raw_injection` status.
+- Bumped version to 1.1.0.
+
 ### v1.0.1
 
 - Fixed `supported_versions` TLS extension in the fake ClientHello builder. The version list length byte was encoded as two bytes (`04 03`) instead of one (`04`), which shifted every extension after it by one byte. This corrupted `psk_key_exchange_modes`, `key_share`, and `padding`, making the fake ClientHello malformed. Strict TLS parsers and some DPI systems would reject it outright.
@@ -503,3 +539,5 @@ MIT License. See [LICENSE](LICENSE) for the full text.
 ## Acknowledgements
 
 This project is a cross-platform conversion of [patterniha's original Windows-only SNI-Spoofing](https://github.com/patterniha/SNI-Spoofing) tool.
+
+The raw socket injection logic (seq_id trick) was ported from [selfishblackberry177's Go reimplementation](https://github.com/selfishblackberry177/sni-spoof).

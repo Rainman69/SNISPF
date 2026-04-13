@@ -80,6 +80,22 @@ def check_platform_capabilities() -> dict:
     except (PermissionError, OSError):
         pass
 
+    # Check AF_PACKET support (Linux only, needed for seq_id injection)
+    try:
+        if platform.system() == "Linux":
+            s = socket.socket(
+                socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0003)
+            )
+            s.close()
+            caps["af_packet"] = True
+            caps["raw_injection"] = True
+        else:
+            caps["af_packet"] = False
+            caps["raw_injection"] = False
+    except (PermissionError, OSError, AttributeError):
+        caps["af_packet"] = False
+        caps["raw_injection"] = False
+
     return caps
 
 

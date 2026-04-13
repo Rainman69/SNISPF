@@ -6,7 +6,11 @@ This is the main engine that:
 3. Applies the chosen DPI bypass strategy
 4. Relays data bidirectionally between client and server
 
-Uses pure userspace techniques (no WinDivert/kernel drivers required).
+When a raw injector is available (Linux + root), it registers each
+outgoing connection so the sniffer can capture the SYN/ACK handshake
+and inject the fake ClientHello with an out-of-window seq number.
+
+Uses pure userspace techniques on platforms without raw socket support.
 """
 
 import asyncio
@@ -25,59 +29,6 @@ logger = logging.getLogger("snispf")
 BUFFER_SIZE = 65535
 
 
-async def relay_data(
-    sock_in: socket.socket,
-    sock_out: socket.socket,
-    peer_task: asyncio.Task,
-    first_data: Optional[bytes] = None,
-    loop: Optional[asyncio.AbstractEventLoop] = None,
-    direction: str = "",
-):
-    """Relay data from one socket to another.
-
-    This is the bidirectional relay loop. Two instances run in parallel:
-    one for client->server and one for server->client.
-
-    Args:
-        sock_in: Source socket to read from
-        sock_out: Destination socket to write to
-        peer_task: The peer relay task (cancelled on error)
-        first_data: Optional first chunk to send before reading
-        loop: Event loop
-        direction: Description string for logging
-    """
-    if loop is None:
-        loop = asyncio.get_running_loop()
-
-    try:
-        # Send any initial data
-        if first_data:
-            await loop.sock_sendall(sock_out, first_data)
-
-        while True:
-            data = await loop.sock_recv(sock_in, BUFFER_SIZE)
-            if not data:
-                break  # Connection closed
-
-            await loop.sock_sendall(sock_out, data)
-
-    except (ConnectionResetError, BrokenPipeError, OSError):
-        pass  # Normal connection termination
-    except Exception:
-        logger.debug(f"Relay error ({direction}): {traceback.format_exc()}")
-    finally:
-        try:
-            sock_in.close()
-        except Exception:
-            pass
-        try:
-            sock_out.close()
-        except Exception:
-            pass
-        if not peer_task.done():
-            peer_task.cancel()
-
-
 async def handle_connection(
     incoming_sock: socket.socket,
     incoming_addr: tuple,
@@ -86,27 +37,21 @@ async def handle_connection(
     fake_sni: str,
     bypass_strategy: BypassStrategy,
     interface_ip: Optional[str] = None,
+    raw_injector=None,
 ):
     """Handle a single incoming connection.
 
-    This implements the connection handling logic from the original tool:
-    1. Accept incoming connection
-    2. Read first data (TLS ClientHello expected)
-    3. Create outgoing connection to target
-    4. Apply DPI bypass strategy
+    Flow:
+    1. Read first data from client (should be TLS ClientHello)
+    2. Create outgoing socket, optionally register with raw injector
+    3. Connect to target server (3-way handshake happens here;
+       the raw injector captures SYN and injects after 3rd ACK)
+    4. Apply the bypass strategy (sends real data, waits for inject confirmation)
     5. Relay data bidirectionally
-
-    Args:
-        incoming_sock: The accepted client socket
-        incoming_addr: Client address tuple (ip, port)
-        connect_ip: Target server IP
-        connect_port: Target server port
-        fake_sni: Fake SNI for bypass
-        bypass_strategy: The bypass strategy to use
-        interface_ip: Optional local IP to bind outgoing connections
     """
     loop = asyncio.get_running_loop()
     outgoing_sock = None
+    local_port = None
 
     try:
         # Read the first data from client (should be TLS ClientHello)
@@ -145,13 +90,30 @@ async def handle_connection(
         except (AttributeError, OSError):
             pass  # Not available on all platforms
 
-        # Connect to target server
+        # If raw injector is available, register the outgoing port
+        # BEFORE connecting so the sniffer can see the SYN.
+        if raw_injector is not None:
+            # We need to bind first to know the local port
+            if not interface_ip:
+                outgoing_sock.bind(("", 0))
+            local_port = outgoing_sock.getsockname()[1]
+            fake_hello = ClientHelloBuilder.build_client_hello(sni=fake_sni)
+            raw_injector.register_port(local_port, fake_hello)
+
+        # Connect to target server (triggers SYN -> SYN+ACK -> ACK)
         await asyncio.wait_for(
             loop.sock_connect(outgoing_sock, (connect_ip, connect_port)),
             timeout=30.0,
         )
 
+        # If we didn't know the port before, grab it now
+        if local_port is None and raw_injector is not None:
+            local_port = outgoing_sock.getsockname()[1]
+
         # Apply DPI bypass strategy
+        # The strategy handles:
+        # - Waiting for raw injection confirmation (if available)
+        # - Sending the real ClientHello (fragmented or not)
         success = await bypass_strategy.apply(
             client_sock=incoming_sock,
             server_sock=outgoing_sock,
@@ -169,11 +131,7 @@ async def handle_connection(
             # Fallback: just send the data directly
             await loop.sock_sendall(outgoing_sock, first_data)
 
-        # Create bidirectional relay tasks
-        # client -> server is already handled (first_data sent by bypass)
-        # Now set up continuous relay
-
-        # Use a done event to signal when either direction closes
+        # Bidirectional relay
         done = asyncio.Event()
 
         async def _relay(s_in, s_out, label):
@@ -213,6 +171,9 @@ async def handle_connection(
                 outgoing_sock.close()
         except Exception:
             pass
+        # Clean up raw injector port state
+        if raw_injector is not None and local_port is not None:
+            raw_injector.cleanup_port(local_port)
 
 
 async def start_server(
@@ -223,20 +184,12 @@ async def start_server(
     fake_sni: str,
     bypass_strategy: BypassStrategy,
     interface_ip: Optional[str] = None,
+    raw_injector=None,
 ):
     """Start the TCP forwarding server.
 
     Creates a listening socket and handles incoming connections,
     applying the DPI bypass strategy to each one.
-
-    Args:
-        listen_host: IP to listen on (0.0.0.0 for all interfaces)
-        listen_port: Port to listen on
-        connect_ip: Target server IP to forward to
-        connect_port: Target server port
-        fake_sni: Fake SNI hostname for bypass
-        bypass_strategy: DPI bypass strategy to use
-        interface_ip: Optional local IP for outgoing connections
     """
     # Create listening socket
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -261,6 +214,10 @@ async def start_server(
     logger.info(f"Forwarding to {connect_ip}:{connect_port}")
     logger.info(f"Fake SNI: {fake_sni}")
     logger.info(f"Bypass strategy: {bypass_strategy.name}")
+    if raw_injector is not None:
+        logger.info("Raw packet injection: ACTIVE (seq_id trick enabled)")
+    else:
+        logger.info("Raw packet injection: not available (fragmentation only)")
     logger.info(f"Interface IP: {interface_ip or 'auto'}")
     logger.info("=" * 60)
     logger.info("Ready! Configure your application to use:")
@@ -272,7 +229,6 @@ async def start_server(
             incoming_sock, addr = await loop.sock_accept(server_sock)
             incoming_sock.setblocking(False)
 
-            # Handle each connection in its own task
             loop.create_task(
                 handle_connection(
                     incoming_sock=incoming_sock,
@@ -282,6 +238,7 @@ async def start_server(
                     fake_sni=fake_sni,
                     bypass_strategy=bypass_strategy,
                     interface_ip=interface_ip,
+                    raw_injector=raw_injector,
                 )
             )
     except asyncio.CancelledError:
