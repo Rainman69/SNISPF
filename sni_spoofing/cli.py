@@ -1,13 +1,11 @@
 """
-SNI-Spoofing CLI - Cross-platform DPI bypass tool.
+SNISPF - Cross-platform SNI spoofing and DPI bypass tool.
 
-Original Windows tool by @patterniha.
-This is a cross-platform CLI reimplementation that works on
-Windows, macOS, and Linux without requiring kernel drivers.
+Works on Windows, macOS, and Linux without requiring kernel drivers.
 
 Usage:
-    sni-spoofing --config config.json
-    sni-spoofing --listen 0.0.0.0:40443 --connect 188.114.98.0:443 --sni auth.vercel.com
+    snispf --config config.json
+    snispf --listen 0.0.0.0:40443 --connect 188.114.98.0:443 --sni auth.vercel.com
 """
 
 import argparse
@@ -43,17 +41,18 @@ from sni_spoofing.utils import (
 # ─── Banner ──────────────────────────────────────────────────────────────────
 
 BANNER = r"""
- ███████╗███╗   ██╗██╗    ███████╗██████╗  ██████╗  ██████╗ ███████╗██╗███╗   ██╗ ██████╗
- ██╔════╝████╗  ██║██║    ██╔════╝██╔══██╗██╔═══██╗██╔═══██╗██╔════╝██║████╗  ██║██╔════╝
- ███████╗██╔██╗ ██║██║    ███████╗██████╔╝██║   ██║██║   ██║█████╗  ██║██╔██╗ ██║██║  ███╗
- ╚════██║██║╚██╗██║██║    ╚════██║██╔═══╝ ██║   ██║██║   ██║██╔══╝  ██║██║╚██╗██║██║   ██║
- ███████║██║ ╚████║██║    ███████║██║     ╚██████╔╝╚██████╔╝██║     ██║██║ ╚████║╚██████╔╝
- ╚══════╝╚═╝  ╚═══╝╚═╝    ╚══════╝╚═╝      ╚═════╝  ╚═════╝ ╚═╝     ╚═╝╚═╝  ╚═══╝ ╚═════╝
+ ███████╗███╗   ██╗██╗███████╗██████╗ ███████╗
+ ██╔════╝████╗  ██║██║██╔════╝██╔══██╗██╔════╝
+ ███████╗██╔██╗ ██║██║███████╗██████╔╝█████╗
+ ╚════██║██║╚██╗██║██║╚════██║██╔═══╝ ██╔══╝
+ ███████║██║ ╚████║██║███████║██║     ██║
+ ╚══════╝╚═╝  ╚═══╝╚═╝╚══════╝╚═╝     ╚═╝
 
      ┌──────────────────────────────────────────────────────────────────┐
-     │  Original Tool by @patterniha                                   │
-     │  CLI Cross-Platform Version (Windows / macOS / Linux)           │
-     │  DPI Bypass via SNI Spoofing + TLS Fragmentation                │
+     │  SNISPF - Cross-Platform DPI Bypass Tool                        │
+     │  SNI Spoofing + TLS Fragmentation                               │
+     │  Works on Windows / macOS / Linux                               │
+     │  https://github.com/Rainman69/SNISPF                            │
      └──────────────────────────────────────────────────────────────────┘
 """
 
@@ -76,7 +75,7 @@ def setup_logging(verbose: bool = False, quiet: bool = False):
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(formatter)
 
-    logger = logging.getLogger("sni-spoofing")
+    logger = logging.getLogger("snispf")
     logger.setLevel(level)
     logger.addHandler(handler)
 
@@ -176,10 +175,9 @@ def build_strategy(config: dict) -> BypassStrategy:
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        prog="sni-spoofing",
+        prog="snispf",
         description=(
-            "SNI-Spoofing CLI - Cross-platform DPI bypass tool.\n"
-            "Original tool by @patterniha. CLI version for all OS.\n\n"
+            "SNISPF - Cross-platform DPI bypass tool.\n\n"
             "This tool forwards TCP connections while applying DPI bypass\n"
             "techniques (SNI spoofing, TLS fragmentation) to circumvent\n"
             "internet censorship."
@@ -200,7 +198,7 @@ def parse_args():
             "  half             - Split record in half\n"
             "  multi            - Split into many small fragments\n"
             "  tls_record_frag  - Use TLS-level record fragmentation\n"
-            "\nOriginal tool: @patterniha | https://t.me/patterniha"
+            "\nhttps://github.com/Rainman69/SNISPF"
         ),
     )
 
@@ -269,7 +267,7 @@ def parse_args():
     parser.add_argument(
         "--version", "-V",
         action="version",
-        version=f"%(prog)s {__version__}",
+        version=f"SNISPF {__version__}",
     )
     parser.add_argument(
         "--info",

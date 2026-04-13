@@ -3,14 +3,14 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "sni-spoofing-cli"
+name = "snispf"
 version = "1.0.0"
-description = "Cross-platform DPI bypass tool via SNI spoofing - CLI version of @patterniha's original tool"
+description = "SNISPF - Cross-platform DPI bypass tool via SNI spoofing"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.8"
 authors = [
-    {name = "patterniha", email = "patterniha@users.noreply.github.com"},
+    {name = "Rainman69"},
 ]
 keywords = ["sni", "spoofing", "dpi", "bypass", "censorship", "tls", "fragment", "cli"]
 classifiers = [
@@ -32,12 +32,12 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/patterniha/sni-spoofing-cli"
-Repository = "https://github.com/patterniha/sni-spoofing-cli"
-Issues = "https://github.com/patterniha/sni-spoofing-cli/issues"
+Homepage = "https://github.com/Rainman69/SNISPF"
+Repository = "https://github.com/Rainman69/SNISPF"
+Issues = "https://github.com/Rainman69/SNISPF/issues"
 
 [project.scripts]
-sni-spoofing = "sni_spoofing.cli:main"
+snispf = "sni_spoofing.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["sni_spoofing*"]

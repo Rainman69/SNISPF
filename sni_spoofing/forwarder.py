@@ -6,8 +6,7 @@ This is the main engine that:
 3. Applies the chosen DPI bypass strategy
 4. Relays data bidirectionally between client and server
 
-Reimplements the functionality of the original patterniha tool
-using pure userspace techniques (no WinDivert/kernel drivers required).
+Uses pure userspace techniques (no WinDivert/kernel drivers required).
 """
 
 import asyncio
@@ -20,7 +19,7 @@ from typing import Optional
 from .bypass.base import BypassStrategy
 from .tls import ClientHelloBuilder
 
-logger = logging.getLogger("sni-spoofing")
+logger = logging.getLogger("snispf")
 
 # Buffer size for socket operations
 BUFFER_SIZE = 65535
