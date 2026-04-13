@@ -274,7 +274,7 @@ class RawInjector:
         """Inject a raw Ethernet frame."""
         try:
             addr = (
-                "",  # interface name (empty = use index)
+                self.iface_name,  # interface name
                 ETH_P_IP,
                 0,  # packet type
                 0,  # arp hardware type
