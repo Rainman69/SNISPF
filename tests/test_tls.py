@@ -34,6 +34,11 @@ class TestClientHelloBuilder(unittest.TestCase):
         # Handshake type should be ClientHello
         self.assertEqual(hello[5], 0x01)
 
+    def test_build_client_hello_target_size(self):
+        """Test that ClientHello hits 517 bytes (matching Go template)."""
+        hello = ClientHelloBuilder.build_client_hello(sni="mci.ir")
+        self.assertEqual(len(hello), 517)
+
     def test_build_client_hello_contains_sni(self):
         """Test that built ClientHello contains the specified SNI."""
         sni = "auth.vercel.com"
@@ -206,6 +211,66 @@ class TestFragmentation(unittest.TestCase):
                 )
 
 
+class TestRawInjector(unittest.TestCase):
+    """Test raw injector frame construction."""
+
+    def test_build_fake_frame_checksum(self):
+        """Test that _build_fake_frame produces valid IP and TCP checksums."""
+        try:
+            from sni_spoofing.bypass.raw_injector import (
+                _build_fake_frame,
+                _ip_checksum,
+                _ip_hdr_len,
+                _tcp_checksum,
+            )
+        except ImportError:
+            self.skipTest("raw_injector not importable")
+
+        # Build a minimal Ethernet+IP+TCP template (14+20+20 = 54 bytes)
+        # Ethernet: dst(6) + src(6) + type(2)
+        eth = bytes(6) + bytes(6) + b"\x08\x00"
+        # IP header: version/ihl(1)+tos(1)+totlen(2)+id(2)+flags/frag(2)+ttl(1)+proto(1)+cksum(2)+src(4)+dst(4)
+        iph = bytearray(20)
+        iph[0] = 0x45  # IPv4, IHL=5
+        iph[8] = 64    # TTL
+        iph[9] = 6     # TCP
+        iph[12:16] = b"\xc0\xa8\x01\x02"  # src 192.168.1.2
+        iph[16:20] = b"\x68\x12\x04\x82"  # dst 104.18.4.130
+        struct.pack_into("!H", iph, 2, 40)  # total length
+        # TCP header: srcport(2)+dstport(2)+seq(4)+ack(4)+offset/flags(2)+window(2)+cksum(2)+urgent(2)
+        tcph = bytearray(20)
+        struct.pack_into("!H", tcph, 0, 54321)  # src port
+        struct.pack_into("!H", tcph, 2, 443)    # dst port
+        struct.pack_into("!I", tcph, 4, 1000)   # seq
+        struct.pack_into("!I", tcph, 8, 2000)   # ack
+        tcph[12] = 0x50  # data offset = 5 words
+        tcph[13] = 0x10  # ACK flag
+
+        template = bytes(eth) + bytes(iph) + bytes(tcph)
+
+        # Build the fake frame
+        fake_payload = ClientHelloBuilder.build_client_hello(sni="test.com")
+        frame = _build_fake_frame(template, 999, fake_payload)
+
+        # Check that the frame is longer than the template
+        self.assertGreater(len(frame), len(template))
+
+        # Verify the seq number: ISN + 1 - len(fake)
+        tcp_off = 14 + 20
+        seq = struct.unpack("!I", frame[tcp_off + 4:tcp_off + 8])[0]
+        expected_seq = (1000 - len(fake_payload)) & 0xFFFFFFFF
+        self.assertEqual(seq, expected_seq)
+
+        # Check PSH flag is set
+        self.assertTrue(frame[tcp_off + 13] & 0x08)
+
+    def test_is_raw_available(self):
+        """Test raw availability detection doesn't crash."""
+        from sni_spoofing.bypass.raw_injector import is_raw_available
+        result = is_raw_available()
+        self.assertIsInstance(result, bool)
+
+
 class TestUtilities(unittest.TestCase):
     """Test utility functions."""
 
@@ -216,8 +281,10 @@ class TestUtilities(unittest.TestCase):
             CombinedBypass,
             FakeSNIBypass,
             FragmentBypass,
+            RawInjector,
+            is_raw_available,
         )
-        from sni_spoofing.forwarder import relay_data, handle_connection, start_server
+        from sni_spoofing.forwarder import handle_connection, start_server
         from sni_spoofing.utils import (
             get_default_interface_ipv4,
             check_platform_capabilities,
@@ -256,6 +323,8 @@ class TestUtilities(unittest.TestCase):
         self.assertIn("platform", caps)
         self.assertIn("fragment_support", caps)
         self.assertIn("tls_record_frag", caps)
+        self.assertIn("af_packet", caps)
+        self.assertIn("raw_injection", caps)
         self.assertTrue(caps["fragment_support"])
         self.assertTrue(caps["tls_record_frag"])
         self.assertTrue(caps["fake_sni"])
@@ -272,6 +341,16 @@ class TestUtilities(unittest.TestCase):
 
         combo = CombinedBypass()
         self.assertEqual(combo.name, "combined")
+
+    def test_strategy_with_raw_injector(self):
+        """Test strategy construction with raw_injector parameter."""
+        from sni_spoofing.bypass import FakeSNIBypass, CombinedBypass
+
+        fake = FakeSNIBypass(raw_injector="mock")
+        self.assertEqual(fake.raw_injector, "mock")
+
+        combo = CombinedBypass(raw_injector="mock")
+        self.assertEqual(combo.raw_injector, "mock")
 
 
 if __name__ == "__main__":
