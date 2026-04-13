@@ -173,21 +173,30 @@ async def handle_connection(
         # client -> server is already handled (first_data sent by bypass)
         # Now set up continuous relay
 
-        # Create a sentinel for coordination
-        c2s_task = asyncio.current_task()
-        s2c_task = asyncio.current_task()
+        # Use a done event to signal when either direction closes
+        done = asyncio.Event()
 
-        # Server -> Client relay
-        s2c_task = loop.create_task(
-            relay_data(outgoing_sock, incoming_sock, c2s_task, direction="S->C")
-        )
+        async def _relay(s_in, s_out, label):
+            try:
+                while True:
+                    data = await loop.sock_recv(s_in, BUFFER_SIZE)
+                    if not data:
+                        break
+                    await loop.sock_sendall(s_out, data)
+            except (ConnectionResetError, BrokenPipeError, OSError):
+                pass
+            except Exception:
+                logger.debug(f"Relay error ({label}): {traceback.format_exc()}")
+            finally:
+                done.set()
 
-        # Client -> Server relay (no first_data, already sent)
-        c2s_task = loop.create_task(
-            relay_data(incoming_sock, outgoing_sock, s2c_task, direction="C->S")
-        )
+        c2s_task = loop.create_task(_relay(incoming_sock, outgoing_sock, "C->S"))
+        s2c_task = loop.create_task(_relay(outgoing_sock, incoming_sock, "S->C"))
 
-        # Wait for both to complete
+        # Wait until one direction closes, then cancel the other
+        await done.wait()
+        c2s_task.cancel()
+        s2c_task.cancel()
         await asyncio.gather(c2s_task, s2c_task, return_exceptions=True)
 
     except asyncio.TimeoutError:
