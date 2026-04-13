@@ -1,7 +1,7 @@
 """Fake SNI bypass strategy.
 
 Sends a fake TLS ClientHello with an allowed SNI before or alongside
-the real traffic. This is the core technique from the original patterniha tool.
+the real traffic.
 
 Cross-platform implementation that uses application-layer tricks instead
 of kernel-level packet injection (WinDivert).

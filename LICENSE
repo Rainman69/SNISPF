@@ -1,7 +1,6 @@
 MIT License
 
-Copyright (c) 2024 patterniha (Original Windows Tool)
-Copyright (c) 2024 Contributors (CLI Cross-Platform Version)
+Copyright (c) 2024 Rainman69
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -20,16 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-ORIGINAL TOOL CREDITS:
-This CLI tool is based on the original SNI-Spoofing tool by @patterniha.
-The original tool was a Windows-only application using WinDivert for
-kernel-level packet manipulation.
-
-This version has been reimplemented as a cross-platform CLI tool using
-pure userspace techniques, making it compatible with Windows, macOS, and Linux.
-
-Telegram: @patterniha
-USDT (BEP20): 0x76a768B53Ca77B43086946315f0BDF21156bF424

@@ -1,145 +1,212 @@
-# SNI-Spoofing CLI
+# SNISPF
 
 ### Cross-Platform DPI Bypass Tool
 
-> **Original tool by [@patterniha](https://t.me/patterniha)**. This repository is a cross-platform CLI conversion of the original Windows-only SNI-Spoofing tool, making it accessible on **Windows, macOS, and Linux**.
+```
+ ███████╗███╗   ██╗██╗███████╗██████╗ ███████╗
+ ██╔════╝████╗  ██║██║██╔════╝██╔══██╗██╔════╝
+ ███████╗██╔██╗ ██║██║███████╗██████╔╝█████╗
+ ╚════██║██║╚██╗██║██║╚════██║██╔═══╝ ██╔══╝
+ ███████║██║ ╚████║██║███████║██║     ██║
+ ╚══════╝╚═╝  ╚═══╝╚═╝╚══════╝╚═╝     ╚═╝
+```
+
+**SNISPF** is a lightweight command-line tool that helps you get past internet censorship. It works by messing with the way your connection introduces itself to firewalls, so filtered websites slip through undetected. Runs on **Windows, macOS, and Linux** -- no drivers, no admin rights needed for most features.
+
+**Maintained by [@Rainman69](https://github.com/Rainman69)**
+
+---
+
+## Table of Contents
+
+- [How Does It Work?](#how-does-it-work)
+- [Requirements](#requirements)
+- [Installation](#installation)
+  - [Method 1: pip install (Recommended)](#method-1-pip-install-recommended)
+  - [Method 2: Run directly without installing](#method-2-run-directly-without-installing)
+  - [Method 3: Clone from source](#method-3-clone-from-source)
+  - [Method 4: Docker](#method-4-docker)
+- [Quick Start Guide](#quick-start-guide)
+  - [Step 1: Start the tool](#step-1-start-the-tool)
+  - [Step 2: Point your app at it](#step-2-point-your-app-at-it)
+- [Configuration](#configuration)
+  - [Using a config file](#using-a-config-file)
+  - [Using command-line flags](#using-command-line-flags)
+  - [Config file reference](#config-file-reference)
+  - [All CLI flags](#all-cli-flags)
+- [Bypass Methods Explained](#bypass-methods-explained)
+  - [fragment (default)](#fragment-default)
+  - [fake_sni](#fake_sni)
+  - [combined (strongest)](#combined-strongest)
+- [Fragment Strategies](#fragment-strategies)
+- [Platform Support](#platform-support)
+- [Troubleshooting](#troubleshooting)
+- [How It Works (Technical Deep Dive)](#how-it-works-technical-deep-dive)
+- [Project Structure](#project-structure)
+- [Running the Tests](#running-the-tests)
+- [License](#license)
+- [Acknowledgements](#acknowledgements)
+
+---
+
+## How Does It Work?
+
+When you visit a website over HTTPS, your device sends a "hello" message (called a **TLS ClientHello**) that contains the website name in plain text. This is known as the **SNI** (Server Name Indication). Internet censorship systems (called **DPI** -- Deep Packet Inspection) read that name and decide whether to block the connection.
+
+SNISPF sits between your app and the internet. It intercepts that "hello" message and either **chops it up** or **sends a decoy** so the censorship system can't read the real website name. The actual destination server still gets the full, correct message and works normally.
 
 ```
- ███████╗███╗   ██╗██╗    ███████╗██████╗  ██████╗  ██████╗ ███████╗██╗███╗   ██╗ ██████╗
- ██╔════╝████╗  ██║██║    ██╔════╝██╔══██╗██╔═══██╗██╔═══██╗██╔════╝██║████╗  ██║██╔════╝
- ███████╗██╔██╗ ██║██║    ███████╗██████╔╝██║   ██║██║   ██║█████╗  ██║██╔██╗ ██║██║  ███╗
- ╚════██║██║╚██╗██║██║    ╚════██║██╔═══╝ ██║   ██║██║   ██║██╔══╝  ██║██║╚██╗██║██║   ██║
- ███████║██║ ╚████║██║    ███████║██║     ╚██████╔╝╚██████╔╝██║     ██║██║ ╚████║╚██████╔╝
- ╚══════╝╚═╝  ╚═══╝╚═╝    ╚══════╝╚═╝      ╚═════╝  ╚═════╝ ╚═╝     ╚═╝╚═╝  ╚═══╝ ╚═════╝
+┌──────────┐     ┌─────────┐     ┌─────────┐     ┌──────────────┐
+│ Your App ├────>│ SNISPF  ├────>│  DPI /  ├────>│ Real Server  │
+│ (browser,│     │ (local  │     │Firewall │     │ (e.g.        │
+│  v2ray,  │     │  proxy) │     │         │     │  Cloudflare) │
+│  etc.)   │     │         │     │         │     │              │
+└──────────┘     └─────────┘     └─────────┘     └──────────────┘
+                      │               │
+                      │ sends fake /  │ sees fake or
+                      │ fragmented    │ incomplete SNI
+                      │ hello message │ --> lets it through
 ```
 
 ---
 
-## Credits & Attribution
+## Requirements
 
-| | |
+- **Python 3.8** or newer (check with `python3 --version` or `python --version`)
+- That's it. No external dependencies, no C compilers, no kernel modules.
+
+If you don't have Python yet:
+
+| OS | How to install Python |
 |---|---|
-| **Original Creator** | **@patterniha** |
-| **Original Tool** | SNI-Spoofing by patterniha v1 (Windows) |
-| **Telegram** | [@patterniha](https://t.me/patterniha) |
-| **Support Original Dev** | `USDT (BEP20): 0x76a768B53Ca77B43086946315f0BDF21156bF424` |
-
-This CLI version is a faithful reimplementation that converts the original Windows-only tool into a cross-platform open-source CLI application. All credit for the concept, technique, and original implementation goes to **@patterniha**.
-
----
-
-## What Does This Tool Do?
-
-This tool is a **TCP forwarder** that bypasses **Deep Packet Inspection (DPI)** by manipulating TLS handshake packets. It works by:
-
-1. **Listening** on a local port for incoming TCP connections
-2. **Intercepting** the TLS ClientHello from your application
-3. **Applying bypass techniques** to hide the real SNI (Server Name Indication) from DPI systems
-4. **Forwarding** traffic transparently to the target server
-
-### How DPI Bypass Works
-
-```
-┌──────────┐    ┌──────────────┐    ┌─────────┐    ┌──────────────┐
-│ Your App │───>│ SNI-Spoofing │───>│   DPI   │───>│ Real Server  │
-│ (Client) │    │   CLI Tool   │    │ Firewall│    │ (e.g. CF)    │
-└──────────┘    └──────────────┘    └─────────┘    └──────────────┘
-                       │                  │
-                       │  Sends fake/     │ DPI sees fake
-                       │  fragmented SNI  │ SNI → allows
-                       │                  │ traffic through
-```
-
-### Bypass Methods
-
-| Method | Description | Effectiveness | Compatibility |
-|--------|-------------|--------------|---------------|
-| `fragment` | Splits TLS ClientHello at SNI boundary | High | All platforms |
-| `fake_sni` | Sends fake ClientHello with allowed SNI | High | All platforms |
-| `combined` | Both fragmentation + fake SNI | Highest | All platforms |
-
-### Fragment Strategies
-
-| Strategy | Description |
-|----------|-------------|
-| `sni_split` | Split in the middle of the SNI hostname (default, most effective) |
-| `half` | Split the TLS record in half |
-| `multi` | Split into many small 5-byte fragments |
-| `tls_record_frag` | Create multiple valid TLS records from one handshake |
+| **Windows** | Download from [python.org](https://www.python.org/downloads/). During install, **check "Add Python to PATH"**. |
+| **macOS** | Run `brew install python` (if you have Homebrew) or download from [python.org](https://www.python.org/downloads/). |
+| **Ubuntu / Debian** | `sudo apt update && sudo apt install python3 python3-pip` |
+| **Fedora** | `sudo dnf install python3 python3-pip` |
+| **Arch** | `sudo pacman -S python python-pip` |
+| **Android (Termux)** | `pkg install python` |
 
 ---
 
 ## Installation
 
-### Option 1: pip install (Recommended)
+### Method 1: pip install (Recommended)
+
+This installs the `snispf` command system-wide:
 
 ```bash
+git clone https://github.com/Rainman69/SNISPF.git
+cd SNISPF
 pip install .
 ```
 
-Then run:
+Now you can run it from anywhere:
+
 ```bash
-sni-spoofing --help
+snispf --help
 ```
 
-### Option 2: Run directly (No installation)
+### Method 2: Run directly without installing
+
+No install needed. Just clone and run:
 
 ```bash
+git clone https://github.com/Rainman69/SNISPF.git
+cd SNISPF
 python run.py --help
 ```
 
-### Option 3: From source
+### Method 3: Clone from source
+
+If you want to run it as a Python module:
 
 ```bash
-git clone https://github.com/patterniha/sni-spoofing-cli.git
-cd sni-spoofing-cli
+git clone https://github.com/Rainman69/SNISPF.git
+cd SNISPF
 python -m sni_spoofing.cli --help
 ```
 
+### Method 4: Docker
+
+```bash
+git clone https://github.com/Rainman69/SNISPF.git
+cd SNISPF
+docker build -t snispf .
+docker run --rm -p 40443:40443 snispf
+```
+
 ---
 
-## Quick Start
+## Quick Start Guide
 
-### 1. Using config file (compatible with original tool)
+### Step 1: Start the tool
 
-```bash
-# Generate default config
-sni-spoofing --generate-config config.json
-
-# Edit config.json with your settings, then run:
-sni-spoofing --config config.json
-```
-
-### 2. Using command-line arguments
+The simplest way to start -- using the default settings:
 
 ```bash
-# Basic usage with default Cloudflare settings
-sni-spoofing -l 0.0.0.0:40443 -c 188.114.98.0:443 -s auth.vercel.com
-
-# With combined bypass method (most effective)
-sni-spoofing -l :40443 -c 188.114.98.0:443 -s dl.google.com -m combined
-
-# With verbose logging
-sni-spoofing -l :40443 -c 188.114.98.0:443 -s auth.vercel.com -v
-
-# Check platform capabilities
-sni-spoofing --info
+snispf -l 0.0.0.0:40443 -c 188.114.98.0:443 -s auth.vercel.com
 ```
 
-### 3. Configure your application
+What each part means:
 
-After starting the tool, configure your application (browser, proxy client, etc.) to connect through:
+| Flag | What it does | Example value |
+|---|---|---|
+| `-l` | The local address and port SNISPF listens on | `0.0.0.0:40443` (all interfaces, port 40443) |
+| `-c` | The real server IP and port to forward traffic to | `188.114.98.0:443` (a Cloudflare IP) |
+| `-s` | The fake website name to show the firewall | `auth.vercel.com` (an allowed domain) |
+
+> **Tip:** If you're not sure what IP or fake SNI to use, the defaults above work for many Cloudflare-based setups.
+
+### Step 2: Point your app at it
+
+Once SNISPF is running, configure your application (web browser, V2Ray, Xray, proxy client, etc.) to connect through:
 
 ```
 Address: 127.0.0.1
-Port: 40443
+Port:    40443
 ```
+
+That's it. Your traffic now goes through SNISPF, which handles the bypass automatically.
 
 ---
 
-## Configuration Reference
+## Configuration
 
-### config.json
+You can configure SNISPF two ways: with a **config file** or with **command-line flags**. Flags override the config file when both are used.
+
+### Using a config file
+
+Generate a default config:
+
+```bash
+snispf --generate-config config.json
+```
+
+This creates a `config.json` file you can edit. Then run with:
+
+```bash
+snispf --config config.json
+```
+
+### Using command-line flags
+
+```bash
+# Basic usage
+snispf -l :40443 -c 188.114.98.0:443 -s auth.vercel.com
+
+# Use the strongest bypass method
+snispf -l :40443 -c 188.114.98.0:443 -s dl.google.com -m combined
+
+# See verbose debug output
+snispf -l :40443 -c 188.114.98.0:443 -s auth.vercel.com -v
+
+# Check what your system supports
+snispf --info
+```
+
+### Config file reference
+
+Here's what each field in `config.json` does:
 
 ```json
 {
@@ -156,165 +223,273 @@ Port: 40443
 }
 ```
 
-| Field | Description | Default |
-|-------|-------------|---------|
-| `LISTEN_HOST` | IP to listen on (`0.0.0.0` = all interfaces) | `0.0.0.0` |
-| `LISTEN_PORT` | Local port to listen on | `40443` |
-| `CONNECT_IP` | Target server IP to forward to | `188.114.98.0` |
-| `CONNECT_PORT` | Target server port | `443` |
-| `FAKE_SNI` | Fake hostname for SNI spoofing | `auth.vercel.com` |
-| `BYPASS_METHOD` | Bypass method: `fragment`, `fake_sni`, `combined` | `fragment` |
-| `FRAGMENT_STRATEGY` | How to fragment: `sni_split`, `half`, `multi`, `tls_record_frag` | `sni_split` |
-| `FRAGMENT_DELAY` | Delay between fragments (seconds) | `0.1` |
-| `USE_TTL_TRICK` | Use IP TTL trick (needs root/admin) | `false` |
-| `FAKE_SNI_METHOD` | Fake SNI sub-method: `prefix_fake`, `ttl_trick`, `disorder` | `prefix_fake` |
+| Field | What it does | Default |
+|---|---|---|
+| `LISTEN_HOST` | IP address to listen on. `0.0.0.0` means all network interfaces. | `0.0.0.0` |
+| `LISTEN_PORT` | Port number to listen on locally. | `40443` |
+| `CONNECT_IP` | The real server's IP address to forward traffic to. | `188.114.98.0` |
+| `CONNECT_PORT` | The real server's port. | `443` |
+| `FAKE_SNI` | A website name that is NOT blocked in your region. The firewall will see this instead of the real one. | `auth.vercel.com` |
+| `BYPASS_METHOD` | Which bypass technique to use: `fragment`, `fake_sni`, or `combined`. | `fragment` |
+| `FRAGMENT_STRATEGY` | How to split the hello message: `sni_split`, `half`, `multi`, or `tls_record_frag`. | `sni_split` |
+| `FRAGMENT_DELAY` | How long to wait between sending fragments (in seconds). | `0.1` |
+| `USE_TTL_TRICK` | Use the IP TTL trick for extra stealth. Needs root/admin. | `false` |
+| `FAKE_SNI_METHOD` | Sub-method for fake_sni: `prefix_fake`, `ttl_trick`, or `disorder`. | `prefix_fake` |
 
-### CLI Arguments
+### All CLI flags
 
 ```
-usage: sni-spoofing [-h] [--config CONFIG] [--generate-config PATH]
-                    [--listen HOST:PORT] [--connect IP:PORT] [--sni HOSTNAME]
-                    [--method {fragment,fake_sni,combined}]
-                    [--fragment-strategy {sni_split,half,multi,tls_record_frag}]
-                    [--fragment-delay SECONDS] [--ttl-trick]
-                    [--verbose] [--quiet] [--version] [--info]
+usage: snispf [-h] [--config CONFIG] [--generate-config PATH]
+              [--listen HOST:PORT] [--connect IP:PORT] [--sni HOSTNAME]
+              [--method {fragment,fake_sni,combined}]
+              [--fragment-strategy {sni_split,half,multi,tls_record_frag}]
+              [--fragment-delay SECONDS] [--ttl-trick]
+              [--verbose] [--quiet] [--version] [--info]
+```
+
+| Flag | Short | Description |
+|---|---|---|
+| `--config` | `-C` | Path to a JSON config file |
+| `--generate-config` | | Create a default config file and exit |
+| `--listen` | `-l` | Local listen address (`HOST:PORT`) |
+| `--connect` | `-c` | Target server address (`IP:PORT`) |
+| `--sni` | `-s` | Fake SNI hostname |
+| `--method` | `-m` | Bypass method: `fragment`, `fake_sni`, or `combined` |
+| `--fragment-strategy` | | How to fragment: `sni_split`, `half`, `multi`, `tls_record_frag` |
+| `--fragment-delay` | | Seconds to wait between fragments |
+| `--ttl-trick` | | Enable TTL trick (needs elevated privileges) |
+| `--verbose` | `-v` | Show detailed debug output |
+| `--quiet` | `-q` | Only show warnings and errors |
+| `--version` | `-V` | Print version and exit |
+| `--info` | | Show what your platform supports and exit |
+
+---
+
+## Bypass Methods Explained
+
+### `fragment` (default)
+
+Splits your TLS hello message into multiple pieces so the firewall can't read the website name from any single piece.
+
+**Best for:** Most situations. Works everywhere, no special privileges needed.
+
+```
+Normal:   [Full hello: ...SNI=blocked-site.com...]  --> Firewall blocks it
+
+SNISPF:   [Piece 1: ...SN]          --> Firewall sees incomplete name
+          [Piece 2: I=blocked-site.com...]  --> Too late, already let through
+```
+
+### `fake_sni`
+
+Sends a decoy hello message with an allowed website name before sending the real one.
+
+**Best for:** When fragmentation alone doesn't work.
+
+```
+Step 1:   [Fake hello: SNI=allowed-site.com]  --> Firewall allows it
+Step 2:   [Real hello: SNI=blocked-site.com]   --> Firewall already decided
+```
+
+### `combined` (strongest)
+
+Uses both methods at the same time: sends a fake hello first, then sends the real hello in fragments.
+
+**Best for:** Aggressive DPI systems. This is the most effective option.
+
+```bash
+snispf -l :40443 -c 188.114.98.0:443 -s dl.google.com -m combined
+```
+
+---
+
+## Fragment Strategies
+
+These control *how* the hello message gets split up (used by `fragment` and `combined` methods):
+
+| Strategy | What it does | When to use it |
+|---|---|---|
+| `sni_split` | Cuts right through the middle of the website name. | Default and most effective for most firewalls. |
+| `half` | Cuts the entire message in half. | Simple fallback if `sni_split` doesn't work. |
+| `multi` | Chops into many tiny 5-byte pieces. | For firewalls that try to reassemble two fragments. |
+| `tls_record_frag` | Creates multiple valid TLS records from one message. | For firewalls that understand TLS but don't handle multi-record. |
+
+Example:
+
+```bash
+snispf -l :40443 -c 188.114.98.0:443 -s auth.vercel.com --fragment-strategy multi
 ```
 
 ---
 
 ## Platform Support
 
-| Platform | Status | Notes |
-|----------|--------|-------|
-| Windows 10/11 | Fully supported | No admin required for basic methods |
-| Linux (Ubuntu, Debian, Fedora, etc.) | Fully supported | Use `sudo` for TTL trick |
-| macOS | Fully supported | Use `sudo` for TTL trick |
-| Android (Termux) | Supported | Install Python via `pkg install python` |
-| WSL / WSL2 | Supported | Standard Linux behavior |
+| Platform | Works? | Notes |
+|---|---|---|
+| Windows 10 / 11 | Yes | No admin needed for basic methods |
+| Linux (Ubuntu, Debian, Fedora, Arch, etc.) | Yes | Use `sudo` for TTL trick |
+| macOS | Yes | Use `sudo` for TTL trick |
+| Android (Termux) | Yes | Install Python first: `pkg install python` |
+| WSL / WSL2 | Yes | Works like native Linux |
 
-### Key Difference from Original
-
-The original tool used **WinDivert** (Windows kernel driver) for packet-level manipulation. This CLI version uses **pure userspace techniques**:
-
-- **TCP fragmentation** via `TCP_NODELAY` socket option
-- **TLS record splitting** at the application layer
-- **IP TTL tricks** via standard socket options (no raw sockets needed)
-
-This makes it truly cross-platform without requiring any kernel drivers or special privileges (except for the optional TTL trick).
-
----
-
-## Architecture
-
-```
-sni-spoofing-cli/
-├── sni_spoofing/
-│   ├── __init__.py          # Package metadata
-│   ├── cli.py               # CLI entry point & argument parsing
-│   ├── forwarder.py         # Core TCP forwarder (async)
-│   ├── bypass/
-│   │   ├── __init__.py      # Strategy exports
-│   │   ├── base.py          # Abstract strategy base
-│   │   ├── fragment.py      # TLS fragmentation bypass
-│   │   ├── fake_sni.py      # Fake SNI bypass
-│   │   └── combined.py      # Combined strategy
-│   ├── tls/
-│   │   ├── __init__.py      # TLS ClientHello builder/parser
-│   │   └── fragment.py      # TLS record fragmentation
-│   └── utils/
-│       └── __init__.py      # Network utilities
-├── tests/
-│   └── test_tls.py          # Unit tests
-├── config.json              # Default configuration
-├── run.py                   # Direct execution entry point
-├── pyproject.toml           # Python packaging config
-├── LICENSE                  # MIT License
-└── README.md                # This file
-```
+All bypass methods work in userspace using standard socket options (`TCP_NODELAY`, `IP_TTL`). No kernel drivers or raw sockets needed for the basic methods.
 
 ---
 
 ## Troubleshooting
 
-### "Permission denied" on port
+### "Permission denied" when starting
 
-Ports below 1024 require root/administrator privileges. Use a port >= 1024:
+Ports below 1024 need root/admin. Use a higher port:
+
 ```bash
-sni-spoofing -l :40443 ...
+snispf -l :40443 ...
 ```
 
 ### "Address already in use"
 
-Another process is using the port. Either stop it or use a different port:
+Something else is using that port. Pick a different one:
+
 ```bash
-sni-spoofing -l :50443 ...
+snispf -l :50443 ...
 ```
 
-### Connection not working
+### It starts but connections don't work
 
-1. Try different bypass methods: `fragment` → `combined` → `fake_sni`
-2. Try different fragment strategies: `sni_split` → `multi` → `tls_record_frag`
-3. Increase fragment delay: `--fragment-delay 0.2`
-4. Try a different fake SNI hostname (one that is allowed in your region)
-5. Ensure the target IP and port are correct
+Try these steps in order:
 
-### TTL trick not working
+1. **Switch bypass method:** `fragment` -> `combined` -> `fake_sni`
+   ```bash
+   snispf -l :40443 -c 188.114.98.0:443 -s auth.vercel.com -m combined
+   ```
 
-The TTL trick requires elevated privileges:
-- **Linux/macOS**: Run with `sudo`
-- **Windows**: Run as Administrator
+2. **Try different fragment strategies:** `sni_split` -> `multi` -> `tls_record_frag`
+   ```bash
+   snispf -l :40443 -c 188.114.98.0:443 -s auth.vercel.com --fragment-strategy multi
+   ```
+
+3. **Increase the delay between fragments:**
+   ```bash
+   snispf -l :40443 -c 188.114.98.0:443 -s auth.vercel.com --fragment-delay 0.2
+   ```
+
+4. **Try a different fake SNI.** Pick a major website that's not blocked in your area:
+   ```bash
+   snispf -l :40443 -c 188.114.98.0:443 -s dl.google.com
+   ```
+
+5. **Double-check the target IP and port.** Make sure `CONNECT_IP` actually points to the server you want.
+
+### TTL trick doesn't work
+
+The TTL trick needs elevated privileges:
+
+- **Linux / macOS:** Run with `sudo`
+- **Windows:** Run the terminal as Administrator
+
+### How do I check what my system supports?
+
+```bash
+snispf --info
+```
+
+This shows which features are available on your platform.
 
 ---
 
-## How It Works (Technical Details)
+## How It Works (Technical Deep Dive)
 
 ### TLS ClientHello Fragmentation
 
-When a TLS connection starts, the client sends a ClientHello message containing the SNI (Server Name Indication) - the hostname it wants to connect to. DPI systems inspect this to filter connections.
+When a TLS connection starts, the client sends a ClientHello message containing the SNI. DPI systems inspect this to filter connections.
 
-**Our approach**: Split the ClientHello into multiple TCP segments so the SNI is divided across packets:
+SNISPF splits the ClientHello into multiple TCP segments so the SNI is divided across packets:
 
 ```
-Normal:   [TLS Record: ...SNI=blocked-site.com...]  → DPI blocks
+Normal:   [TLS Record: ...SNI=blocked-site.com...]  --> DPI reads and blocks
 
-Ours:     [Fragment 1: ...SN]  → DPI sees incomplete SNI
-          [Fragment 2: I=blocked-site.com...]  → DPI can't match
+SNISPF:   [Fragment 1: ...SN]                       --> DPI sees incomplete SNI
+          [Fragment 2: I=blocked-site.com...]        --> DPI can't match pattern
 ```
+
+This works because many DPI systems only inspect the first TCP segment or don't reassemble the full TCP stream.
 
 ### Fake SNI Injection
 
-Send a fake ClientHello with an allowed SNI before the real one:
+A fake ClientHello with an allowed SNI is sent before the real one:
 
 ```
-Step 1:   [Fake ClientHello: SNI=allowed-site.com]  → DPI allows
-Step 2:   [Real ClientHello: SNI=blocked-site.com]   → DPI already decided
+Step 1:   [Fake ClientHello: SNI=allowed-site.com]  --> DPI allows it
+Step 2:   [Real ClientHello: SNI=blocked-site.com]   --> DPI already decided
 ```
+
+The server ignores the fake because it's a malformed/incomplete handshake.
 
 ### TTL Trick
 
-Send the fake packet with a low IP TTL (Time To Live):
+The fake packet is sent with a low IP TTL (Time To Live):
 
 ```
-Fake packet (TTL=3):  Reaches DPI (2 hops away) but expires before server
-Real packet (TTL=64): Reaches server normally
+Fake packet (TTL=3):  Reaches DPI (2 hops away) but expires before the server
+Real packet (TTL=64): Reaches the server normally
 ```
 
-DPI sees the fake SNI, allows traffic. Server never sees the fake packet.
+The DPI sees the fake SNI and allows the traffic. The server never sees the fake packet at all.
 
 ---
 
-## Support the Original Creator
+## Project Structure
 
-If you use this tool for free internet access, please consider supporting **@patterniha**:
+```
+SNISPF/
+├── sni_spoofing/               # Main package
+│   ├── __init__.py             # Version and metadata
+│   ├── cli.py                  # Command-line interface and argument parsing
+│   ├── forwarder.py            # Core async TCP forwarder
+│   ├── bypass/                 # Bypass strategy implementations
+│   │   ├── __init__.py         # Exports all strategies
+│   │   ├── base.py             # Abstract base class for strategies
+│   │   ├── fragment.py         # TLS fragmentation bypass
+│   │   ├── fake_sni.py         # Fake SNI bypass
+│   │   └── combined.py         # Combined (fragment + fake SNI) bypass
+│   ├── tls/                    # TLS packet handling
+│   │   ├── __init__.py         # ClientHello builder and parser
+│   │   └── fragment.py         # TLS record fragmentation logic
+│   └── utils/                  # Utility functions
+│       └── __init__.py         # Network helpers, platform detection
+├── tests/
+│   └── test_tls.py             # Unit tests
+├── config.json                 # Default configuration file
+├── run.py                      # Run without installing (python run.py)
+├── pyproject.toml              # Python package configuration
+├── Dockerfile                  # Docker support
+├── LICENSE                     # MIT License
+└── README.md                   # You are here
+```
 
-**USDT (BEP20):** `0x76a768B53Ca77B43086946315f0BDF21156bF424`
+---
 
-**Telegram:** [@patterniha](https://t.me/patterniha)
+## Running the Tests
+
+```bash
+cd SNISPF
+python -m pytest tests/ -v
+```
+
+Or without pytest:
+
+```bash
+python -m unittest tests.test_tls -v
+```
 
 ---
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details.
+MIT License. See [LICENSE](LICENSE) for the full text.
 
-Original tool by @patterniha. This repository is a CLI cross-platform conversion.
+---
+
+## Acknowledgements
+
+This project is a cross-platform conversion of patterniha's original Windows-only SNI-Spoofing tool.
