@@ -87,8 +87,14 @@ def _fragment_at_sni(data: bytes) -> List[bytes]:
     return [data[:split_point], data[split_point:]]
 
 
-def _fragment_multi(data: bytes, chunk_size: int = 5) -> List[bytes]:
-    """Split into many small fragments."""
+def _fragment_multi(data: bytes, chunk_size: int = 24) -> List[bytes]:
+    """Split into many small fragments.
+
+    Each fragment gets sent as its own TCP segment with TCP_NODELAY.
+    A chunk size of 24 bytes keeps the fragment count reasonable
+    (about 22 fragments for a 517-byte ClientHello) while still being
+    small enough that no single fragment contains the entire SNI.
+    """
     fragments = []
     for i in range(0, len(data), chunk_size):
         fragments.append(data[i : i + chunk_size])
