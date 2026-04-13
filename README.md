@@ -502,4 +502,4 @@ MIT License. See [LICENSE](LICENSE) for the full text.
 
 ## Acknowledgements
 
-This project is a cross-platform conversion of patterniha's original Windows-only SNI-Spoofing tool.
+This project is a cross-platform conversion of [patterniha's original Windows-only SNI-Spoofing](https://github.com/patterniha/SNI-Spoofing) tool.
