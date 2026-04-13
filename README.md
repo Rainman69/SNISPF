@@ -484,6 +484,16 @@ python -m unittest tests.test_tls -v
 
 ---
 
+## Changelog
+
+### v1.0.1
+
+- Fixed `supported_versions` TLS extension in the fake ClientHello builder. The version list length byte was encoded as two bytes (`04 03`) instead of one (`04`), which shifted every extension after it by one byte. This corrupted `psk_key_exchange_modes`, `key_share`, and `padding`, making the fake ClientHello malformed. Strict TLS parsers and some DPI systems would reject it outright.
+- Fixed the bidirectional relay task setup. The two relay directions (client-to-server and server-to-client) were referencing the wrong peer task during creation, which could cause one relay direction to fail to clean up when the other direction closed.
+- Bumped version to 1.0.1.
+
+---
+
 ## License
 
 MIT License. See [LICENSE](LICENSE) for the full text.

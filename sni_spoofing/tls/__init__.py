@@ -126,8 +126,8 @@ class ClientHelloBuilder:
     # Supported versions extension (TLS 1.3, TLS 1.2)
     SUPPORTED_VERSIONS = bytes.fromhex(
         "002b"  # extension type: supported_versions
-        "0005"  # length
-        "0403"  # list length
+        "0005"  # length: 5 bytes of data follow
+        "04"    # supported_versions list length: 4 bytes (2 versions x 2 bytes)
         "0304"  # TLS 1.3
         "0303"  # TLS 1.2
     )
