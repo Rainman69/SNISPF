@@ -14,7 +14,7 @@
 **SNISPF** is a lightweight command-line tool that helps you get past internet censorship. It works by messing with the way your connection introduces itself to firewalls, so filtered websites slip through undetected. Runs on **Windows, macOS, and Linux** -- no drivers, no admin rights needed for most features.
 
 **Maintained by [@Rainman69](https://github.com/Rainman69)**
-
+**Join:[@V2raysCollector](https://t.me/V2raysCollector)**
 ---
 
 ## Table of Contents
