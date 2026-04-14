@@ -155,6 +155,7 @@ class RawInjector:
 
         self.raw_fd = None
         self.iface_idx = None
+        self.iface_name = None
         self.running = False
         self._sniffer_thread = None
 
@@ -172,14 +173,15 @@ class RawInjector:
             return False
 
         # Find the interface
-        self.iface_idx = self._find_interface()
-        if self.iface_idx is None:
+        iface_info = self._find_interface()
+        if iface_info is None:
             logger.warning("Cannot determine outgoing interface for raw injection")
             self.raw_fd.close()
             self.raw_fd = None
             return False
 
-        self.raw_fd.bind(("", ETH_P_ALL))
+        self.iface_name, self.iface_idx = iface_info
+        self.raw_fd.bind((self.iface_name, ETH_P_ALL))
 
         self.running = True
         self._sniffer_thread = threading.Thread(
@@ -199,7 +201,11 @@ class RawInjector:
                 pass
 
     def _find_interface(self):
-        """Find the network interface index for the target IP."""
+        """Find the network interface name and index for the target IP.
+
+        Returns:
+            Tuple of (interface_name, interface_index) or None if not found.
+        """
         import fcntl
         import array
 
@@ -234,7 +240,7 @@ class RawInjector:
                     )
                     idx = struct.unpack("16sI", result)[1]
                     logger.debug(f"Using interface {iface_name} (index {idx})")
-                    return idx
+                    return (iface_name, idx)
                 offset += 40  # struct ifreq size
 
         except Exception as e:
@@ -269,7 +275,7 @@ class RawInjector:
         """Inject a raw Ethernet frame."""
         try:
             addr = (
-                "",  # interface name (empty = use index)
+                self.iface_name or "",  # interface name
                 ETH_P_IP,
                 0,  # packet type
                 0,  # arp hardware type
