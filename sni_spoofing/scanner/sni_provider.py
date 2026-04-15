@@ -19,28 +19,51 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger("snispf")
 
-# Default SNI domains -- all are behind Cloudflare's CDN.
-# The list is ordered roughly by global traffic volume so the most
-# "innocuous" names come first.
+# Default SNI domains -- ALL verified to be behind Cloudflare's CDN.
+#
+# IMPORTANT: Every domain on this list has been verified to resolve to
+# Cloudflare IP ranges. Non-Cloudflare domains (e.g. dl.google.com,
+# cdn.shopify.com, fonts.googleapis.com, cdn.jsdelivr.net, www.zoom.us)
+# must NOT be listed here because they will fail TLS handshake when
+# connected through Cloudflare IPs.
+#
+# The list is ordered by priority: domains that are least likely to be
+# blocked in restrictive networks (like Iran) come first. Cloudflare's
+# own infrastructure domains are prioritised because they are critical
+# for many services and rarely blocked completely.
 DEFAULT_SNI_DOMAINS = [
-    "auth.vercel.com",
-    "dl.google.com",
-    "www.speedtest.net",
-    "www.canva.com",
+    # ── Cloudflare infrastructure (highest priority, almost never blocked) ──
     "cdnjs.cloudflare.com",
     "ajax.cloudflare.com",
+    "static.cloudflareinsights.com",
+    "challenges.cloudflare.com",
+    "workers.cloudflare.com",
+    "cloudflare-dns.com",
+    "radar.cloudflare.com",
+    "dash.cloudflare.com",
+    # ── High-traffic sites behind Cloudflare (commonly whitelisted) ──
+    "www.speedtest.net",
+    "www.canva.com",
     "www.udemy.com",
     "www.medium.com",
     "www.discord.com",
-    "cdn.shopify.com",
     "registry.npmjs.org",
+    "www.npmjs.com",
     "api.openai.com",
-    "static.cloudflareinsights.com",
-    "www.figma.com",
-    "fonts.googleapis.com",
-    "cdn.jsdelivr.net",
-    "www.notion.so",
-    "www.zoom.us",
+    "auth.vercel.com",
+    "unpkg.com",
+    # ── Large services on Cloudflare (good fallbacks) ──
+    "www.crunchyroll.com",
+    "www.zendesk.com",
+    "www.hubspot.com",
+    "www.glassdoor.com",
+    "www.garmin.com",
+    "www.patreon.com",
+    "www.toptal.com",
+    "www.gitlab.com",
+    "www.coindesk.com",
+    "www.time.is",
+    "onesignal.com",
 ]
 
 

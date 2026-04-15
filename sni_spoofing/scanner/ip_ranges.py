@@ -4,6 +4,11 @@ Maintains the official Cloudflare IPv4 CIDR blocks and provides
 efficient random IP sampling from them, weighted by subnet size.
 The list can be refreshed at runtime from https://www.cloudflare.com/ips-v4/
 or extended with user-supplied ranges.
+
+For networks with DNS poisoning (e.g. Iran), the module also ships a set
+of pre-resolved "seed" IPs that have historically been clean on
+Cloudflare's edge.  The scanner can start by testing these known-good
+IPs first -- no DNS resolution required.
 """
 
 import ipaddress
@@ -32,6 +37,147 @@ CLOUDFLARE_IPV4_RANGES = [
     "104.24.0.0/14",
     "172.64.0.0/13",
     "131.0.72.0/22",
+]
+
+# ── Pre-resolved seed IPs ─────────────────────────────────────────────
+#
+# These are known Cloudflare edge IPs that have been verified to respond
+# to TLS handshakes.  In regions with DNS poisoning (e.g. Iran), normal
+# DNS resolution of Cloudflare domains may return bogus answers or time
+# out entirely.  By shipping these IPs as "seeds", the scanner can skip
+# DNS resolution altogether and go straight to TCP+TLS probing.
+#
+# The IPs are spread across many Cloudflare /20 and /13 prefixes so that
+# if one prefix is blocked, others will still work.  They are grouped by
+# the Cloudflare range they belong to.
+#
+# These are NOT meant to be exhaustive -- the scanner will also generate
+# random IPs from CLOUDFLARE_IPV4_RANGES to discover new clean endpoints.
+# The seeds just provide a head start and a guaranteed set of candidates
+# that don't require DNS.
+CLOUDFLARE_SEED_IPS = [
+    # ── 104.16.0.0/13 (largest range, most variety) ──
+    "104.16.1.34",     # registry.npmjs.org
+    "104.16.6.34",     # registry.npmjs.org
+    "104.16.8.34",     # registry.npmjs.org
+    "104.16.24.14",    # www.patreon.com
+    "104.16.25.14",    # www.patreon.com
+    "104.16.25.46",    # www.glassdoor.com
+    "104.16.79.73",    # static.cloudflareinsights.com
+    "104.16.80.73",    # static.cloudflareinsights.com
+    "104.16.102.112",  # www.canva.com
+    "104.16.103.112",  # www.canva.com
+    "104.16.142.237",  # www.udemy.com
+    "104.16.143.237",  # www.udemy.com
+    "104.16.160.145",  # onesignal.com
+    "104.16.196.131",  # workers.cloudflare.com
+    "104.16.197.131",  # workers.cloudflare.com
+    "104.16.248.249",  # cloudflare-dns.com
+    "104.16.249.249",  # cloudflare-dns.com
+    "104.17.24.14",    # cdnjs.cloudflare.com
+    "104.17.25.14",    # cdnjs.cloudflare.com
+    "104.17.64.70",    # www.glassdoor.com
+    "104.17.72.14",    # ajax.cloudflare.com
+    "104.17.73.14",    # ajax.cloudflare.com
+    "104.17.110.184",  # dash.cloudflare.com
+    "104.17.111.184",  # dash.cloudflare.com
+    "104.17.111.223",  # onesignal.com
+    "104.17.134.117",  # www.npmjs.com
+    "104.17.135.117",  # www.npmjs.com
+    "104.17.147.16",   # www.garmin.com
+    "104.17.147.22",   # www.speedtest.net
+    "104.17.148.16",   # www.garmin.com
+    "104.17.148.22",   # www.speedtest.net
+    # ── 104.18.0.0/15 (still in 104.16.0.0/13) ──
+    "104.18.0.22",     # unpkg.com
+    "104.18.1.22",     # unpkg.com
+    "104.18.22.113",   # www.coindesk.com
+    "104.18.23.113",   # www.coindesk.com
+    "104.18.28.213",   # www.toptal.com
+    "104.18.29.213",   # www.toptal.com
+    "104.18.30.78",    # radar.cloudflare.com
+    "104.18.31.78",    # radar.cloudflare.com
+    "104.18.34.51",    # www.zendesk.com
+    "104.18.34.202",   # www.crunchyroll.com
+    "104.18.35.15",    # www.coinbase.com
+    "104.18.38.202",   # auth.vercel.com
+    "104.18.39.114",   # www.hubspot.com
+    "104.18.94.41",    # challenges.cloudflare.com
+    "104.18.95.41",    # challenges.cloudflare.com
+    # ── 104.26.0.0/15 (part of 104.24.0.0/14) ──
+    "104.26.12.54",    # www.time.is
+    "104.26.13.54",    # www.time.is
+    # ── 162.158.0.0/15 ──
+    "162.159.135.232",  # www.discord.com
+    "162.159.136.232",  # www.discord.com
+    "162.159.137.232",  # www.discord.com
+    "162.159.138.232",  # www.discord.com
+    "162.159.140.245",  # api.openai.com
+    "162.159.152.4",    # www.medium.com
+    "162.159.153.4",    # www.medium.com
+    # ── 172.64.0.0/13 ──
+    "172.64.148.142",  # www.hubspot.com
+    "172.64.149.54",   # auth.vercel.com
+    "172.64.152.241",  # www.coinbase.com
+    "172.64.153.54",   # www.crunchyroll.com
+    "172.64.153.205",  # www.zendesk.com
+    "172.65.251.78",   # www.gitlab.com
+    "172.66.0.243",    # api.openai.com
+    # ── 188.114.96.0/20 ──
+    "188.114.96.1",
+    "188.114.97.1",
+    "188.114.98.1",
+    "188.114.99.1",
+    "188.114.96.3",
+    "188.114.97.3",
+    "188.114.98.3",
+    "188.114.99.3",
+    # ── 141.101.64.0/18 ──
+    "141.101.64.1",
+    "141.101.65.1",
+    "141.101.66.1",
+    "141.101.67.1",
+    "141.101.68.1",
+    "141.101.69.1",
+    "141.101.76.1",
+    "141.101.77.1",
+    # ── 198.41.128.0/17 ──
+    "198.41.192.1",
+    "198.41.193.1",
+    "198.41.200.1",
+    "198.41.201.1",
+    "198.41.208.1",
+    "198.41.209.1",
+    "198.41.212.1",
+    "198.41.213.1",
+    # ── 173.245.48.0/20 ──
+    "173.245.48.1",
+    "173.245.49.1",
+    "173.245.50.1",
+    "173.245.58.1",
+    "173.245.59.1",
+    # ── 108.162.192.0/18 ──
+    "108.162.192.1",
+    "108.162.193.1",
+    "108.162.194.1",
+    "108.162.195.1",
+    "108.162.210.1",
+    "108.162.211.1",
+    # ── 103.21.244.0/22, 103.22.200.0/22, 103.31.4.0/22 ──
+    "103.21.244.1",
+    "103.21.245.1",
+    "103.22.200.1",
+    "103.22.201.1",
+    "103.31.4.1",
+    "103.31.5.1",
+    # ── 190.93.240.0/20 ──
+    "190.93.240.1",
+    "190.93.241.1",
+    "190.93.244.1",
+    "190.93.245.1",
+    # ── 131.0.72.0/22 ──
+    "131.0.72.1",
+    "131.0.73.1",
 ]
 
 
@@ -154,6 +300,42 @@ class CloudflareIPPool:
                 seen.add(ip)
                 results.append(ip)
             attempts += 1
+        return results
+
+    def sample_with_seeds(self, count: int) -> List[str]:
+        """Return *count* IPs, starting with seed IPs first.
+
+        In networks with DNS poisoning (e.g. Iran), this ensures the
+        scanner always has a guaranteed set of known-good Cloudflare IPs
+        to test, without needing any DNS resolution.
+
+        The returned list starts with shuffled seed IPs (not blacklisted),
+        topped up with random IPs from the CIDR pool to reach *count*.
+        """
+        seen: Set[str] = set()
+        results: List[str] = []
+
+        # Shuffle a copy of the seed list so different runs test in different order
+        seeds = list(CLOUDFLARE_SEED_IPS)
+        random.shuffle(seeds)
+
+        for ip in seeds:
+            if ip not in self._blacklist and ip not in seen:
+                seen.add(ip)
+                results.append(ip)
+                if len(results) >= count:
+                    return results
+
+        # Top up with random IPs from CIDR ranges
+        max_attempts = (count - len(results)) * 5
+        attempts = 0
+        while len(results) < count and attempts < max_attempts:
+            ip = self.random_ip()
+            if ip not in seen:
+                seen.add(ip)
+                results.append(ip)
+            attempts += 1
+
         return results
 
     # ── Specific IPs ──────────────────────────────────────────────────

@@ -13,7 +13,7 @@
 
 **SNISPF** is a lightweight command-line tool that helps you get past internet censorship. It works by messing with the way your connection introduces itself to firewalls, so filtered websites slip through undetected. Runs on **Windows, macOS, and Linux** -- no drivers, no admin rights needed for most features.
 
-**New in v1.2.0:** Built-in Cloudflare IP scanner with automatic endpoint selection, SNI rotation, and real-time failover. No more guessing which IP to use -- SNISPF finds the fastest clean IP for your network automatically.
+**New in v1.3.0:** Pre-resolved seed IPs that work without DNS resolution (critical for networks with DNS poisoning like Iran). All SNI domains are now verified Cloudflare-only. Scanner tests speed and connectivity on pre-loaded IPs -- no DNS required.
 
 **Maintained by [@Rainman69](https://github.com/Rainman69)**
 ---
@@ -169,7 +169,7 @@ docker run --rm -p 40443:40443 snispf
 The simplest way to start -- using the default settings:
 
 ```bash
-snispf -l 0.0.0.0:40443 -c 188.114.98.0:443 -s auth.vercel.com
+snispf -l 0.0.0.0:40443 -c 104.18.38.202:443 -s cdnjs.cloudflare.com
 ```
 
 What each part means:
@@ -177,8 +177,8 @@ What each part means:
 | Flag | What it does | Example value |
 |---|---|---|
 | `-l` | The local address and port SNISPF listens on | `0.0.0.0:40443` (all interfaces, port 40443) |
-| `-c` | The real server IP and port to forward traffic to | `188.114.98.0:443` (a Cloudflare IP) |
-| `-s` | The fake website name to show the firewall | `auth.vercel.com` (an allowed domain) |
+| `-c` | The real server IP and port to forward traffic to | `104.18.38.202:443` (a Cloudflare IP) |
+| `-s` | The fake website name to show the firewall | `cdnjs.cloudflare.com` (an allowed domain) |
 
 > **Tip:** If you're not sure what IP or fake SNI to use, try **auto mode** instead. It figures everything out for you.
 
@@ -210,7 +210,7 @@ snispf --auto --rescan 300
 snispf --auto -m combined
 
 # Auto mode with custom SNI domains
-snispf --auto --sni-list "dl.google.com,www.speedtest.net,cdnjs.cloudflare.com"
+snispf --auto --sni-list "cdnjs.cloudflare.com,www.speedtest.net,ajax.cloudflare.com"
 
 # Auto mode with verbose logging to see what's happening
 snispf --auto -v
@@ -259,7 +259,7 @@ Output:
   TLS Latency: 28ms
 
   Use this IP with:
-    snispf -l :40443 -c 104.18.42.139:443 -s auth.vercel.com
+    snispf -l :40443 -c 104.18.42.139:443 -s cdnjs.cloudflare.com
 ```
 
 ### Scan with download speed test
@@ -287,7 +287,7 @@ snispf --scan --fetch-ranges
 You can specify which SNI domains to use for probing:
 
 ```bash
-snispf --scan --sni-list "dl.google.com,www.speedtest.net,cdnjs.cloudflare.com"
+snispf --scan --sni-list "cdnjs.cloudflare.com,www.speedtest.net,ajax.cloudflare.com"
 ```
 
 ### Background rescanning
@@ -317,14 +317,21 @@ SNISPF maintains a pool of SNI domains (Cloudflare-fronted sites) and rotates be
 
 Built-in SNI domains include:
 
-- `auth.vercel.com`
-- `dl.google.com`
-- `www.speedtest.net`
 - `cdnjs.cloudflare.com`
 - `ajax.cloudflare.com`
+- `static.cloudflareinsights.com`
+- `challenges.cloudflare.com`
+- `workers.cloudflare.com`
+- `cloudflare-dns.com`
+- `www.speedtest.net`
+- `www.canva.com`
+- `www.discord.com`
 - `registry.npmjs.org`
-- `cdn.shopify.com`
+- `api.openai.com`
+- `auth.vercel.com`
 - and more...
+
+> **Important:** All default SNI domains are verified to be behind Cloudflare's CDN. Non-Cloudflare domains (like `dl.google.com`, `cdn.shopify.com`, `fonts.googleapis.com`) will NOT work with Cloudflare IPs and have been removed in v1.3.0.
 
 You can override or extend the list:
 
@@ -362,16 +369,16 @@ snispf --config config.json
 
 ```bash
 # Basic usage
-snispf -l :40443 -c 188.114.98.0:443 -s auth.vercel.com
+snispf -l :40443 -c 104.18.38.202:443 -s cdnjs.cloudflare.com
 
 # Use the strongest bypass method
-snispf -l :40443 -c 188.114.98.0:443 -s dl.google.com -m combined
+snispf -l :40443 -c 104.18.38.202:443 -s www.speedtest.net -m combined
 
 # Auto mode with scanner
 snispf --auto -m combined --rescan 300
 
 # See verbose debug output
-snispf -l :40443 -c 188.114.98.0:443 -s auth.vercel.com -v
+snispf -l :40443 -c 104.18.38.202:443 -s cdnjs.cloudflare.com -v
 
 # Check what your system supports
 snispf --info
@@ -385,9 +392,9 @@ Here's what each field in `config.json` does:
 {
   "LISTEN_HOST": "0.0.0.0",
   "LISTEN_PORT": 40443,
-  "CONNECT_IP": "188.114.98.0",
+  "CONNECT_IP": "104.18.38.202",
   "CONNECT_PORT": 443,
-  "FAKE_SNI": "auth.vercel.com",
+  "FAKE_SNI": "cdnjs.cloudflare.com",
   "BYPASS_METHOD": "fragment",
   "FRAGMENT_STRATEGY": "sni_split",
   "FRAGMENT_DELAY": 0.1,
@@ -410,9 +417,9 @@ Here's what each field in `config.json` does:
 |---|---|---|
 | `LISTEN_HOST` | IP address to listen on. `0.0.0.0` means all network interfaces. | `0.0.0.0` |
 | `LISTEN_PORT` | Port number to listen on locally. | `40443` |
-| `CONNECT_IP` | The real server's IP address to forward traffic to. | `188.114.98.0` |
+| `CONNECT_IP` | The real server's IP address to forward traffic to. | `104.18.38.202` |
 | `CONNECT_PORT` | The real server's port. | `443` |
-| `FAKE_SNI` | A website name that is NOT blocked in your region. The firewall will see this instead of the real one. | `auth.vercel.com` |
+| `FAKE_SNI` | A website name that is NOT blocked in your region. The firewall will see this instead of the real one. Must be behind Cloudflare! | `cdnjs.cloudflare.com` |
 | `BYPASS_METHOD` | Which bypass technique to use: `fragment`, `fake_sni`, or `combined`. | `fragment` |
 | `FRAGMENT_STRATEGY` | How to split the hello message: `sni_split`, `half`, `multi`, or `tls_record_frag`. | `sni_split` |
 | `FRAGMENT_DELAY` | How long to wait between sending fragments (in seconds). | `0.1` |
@@ -517,10 +524,10 @@ Uses both methods at the same time: injects a fake hello (if root is available),
 **Without root:** Fragments only (the fake injection is skipped since it can't be done safely without raw sockets).
 
 ```bash
-snispf -l :40443 -c 188.114.98.0:443 -s dl.google.com -m combined
+snispf -l :40443 -c 104.18.38.202:443 -s www.speedtest.net -m combined
 
 # On Linux, run with sudo for the full seq_id trick:
-sudo snispf -l :40443 -c 188.114.98.0:443 -s dl.google.com -m combined
+sudo snispf -l :40443 -c 104.18.38.202:443 -s www.speedtest.net -m combined
 ```
 
 ---
@@ -539,7 +546,7 @@ These control *how* the hello message gets split up (used by `fragment` and `com
 Example:
 
 ```bash
-snispf -l :40443 -c 188.114.98.0:443 -s auth.vercel.com --fragment-strategy multi
+snispf -l :40443 -c 104.18.38.202:443 -s cdnjs.cloudflare.com --fragment-strategy multi
 ```
 
 ---
@@ -602,9 +609,9 @@ Try these steps in order:
    snispf --auto --fragment-delay 0.2
    ```
 
-5. **Try a different fake SNI.** Pick a major website that's not blocked in your area:
+5. **Try a different fake SNI.** Pick a major Cloudflare-backed website that's not blocked in your area:
    ```bash
-   snispf --auto --sni-list "dl.google.com,www.speedtest.net,cdnjs.cloudflare.com"
+   snispf --auto --sni-list "cdnjs.cloudflare.com,www.speedtest.net,ajax.cloudflare.com"
    ```
 
 6. **Scan more IPs.** The default 100 might not be enough:
@@ -618,7 +625,7 @@ This usually means your network heavily filters Cloudflare traffic:
 
 1. Try different SNI domains:
    ```bash
-   snispf --scan --sni-list "dl.google.com,fonts.googleapis.com"
+   snispf --scan --sni-list "cdnjs.cloudflare.com,www.speedtest.net"
    ```
 
 2. Increase the timeout:
@@ -773,7 +780,8 @@ SNISPF/
 ├── pyproject.toml              # Python package configuration
 ├── Dockerfile                  # Docker support
 ├── LICENSE                     # MIT License
-└── README.md                   # You are here
+├── README.md                   # You are here
+└── README_FA.md                # Persian tutorial (راهنمای فارسی)
 ```
 
 ---
@@ -795,6 +803,16 @@ python -m unittest discover tests/ -v
 
 ## Changelog
 
+### v1.3.0
+
+- **Added 100+ pre-resolved Cloudflare seed IPs.** The scanner now ships with a built-in list of known-good Cloudflare edge IPs spread across all major prefixes. These are tested first during scans, so no DNS resolution is needed. This is critical for networks with DNS poisoning (like Iran) where DNS queries for Cloudflare domains return bogus results.
+- **Fixed SNI domain list: removed 7 non-Cloudflare domains.** `dl.google.com`, `cdn.shopify.com`, `www.figma.com`, `fonts.googleapis.com`, `cdn.jsdelivr.net`, `www.notion.so`, and `www.zoom.us` were NOT behind Cloudflare and would fail TLS handshake when connected through Cloudflare IPs. They have been replaced with verified Cloudflare-only domains.
+- **Expanded default SNI domains to 30+.** Added Cloudflare infrastructure domains (`challenges.cloudflare.com`, `workers.cloudflare.com`, `cloudflare-dns.com`, `radar.cloudflare.com`, `dash.cloudflare.com`) which are almost never blocked, plus popular verified Cloudflare sites (`www.crunchyroll.com`, `www.zendesk.com`, `www.hubspot.com`, `www.gitlab.com`, `www.patreon.com`, `www.coindesk.com`, `unpkg.com`, etc.).
+- **Scanner uses seed IPs first.** `scan_once()` now calls `sample_with_seeds()` which returns pre-resolved IPs before falling back to random CIDR sampling. This eliminates DNS dependency during scanning.
+- **Updated default CONNECT_IP and FAKE_SNI.** Default IP changed from `188.114.98.0` (a network address) to `104.18.38.202` (a real Cloudflare edge IP). Default SNI changed from `auth.vercel.com` to `cdnjs.cloudflare.com` (Cloudflare infrastructure, highest availability).
+- Added 6 new unit tests: seed IP validation, sample_with_seeds behaviour, non-Cloudflare domain guard test, blacklist interaction with seeds. Total: 77 tests.
+- Bumped version to 1.3.0.
+
 ### v1.2.0
 
 - **Added internal Cloudflare IP scanner.** Scans random IPs from all official Cloudflare IPv4 ranges using a three-stage probe pipeline (TCP connect, TLS handshake, download speed). Probes run in parallel with configurable concurrency. Results are ranked by combined latency score.
@@ -807,7 +825,7 @@ python -m unittest discover tests/ -v
 - **Fixed `fragment_data` off-by-one.** The last fragment now correctly includes all remaining data when `pos` advances past all specified sizes.
 - **Fixed `parse_host_port` crash on non-numeric port.** Now validates port input and exits with a clear error message.
 - Added `--scan`, `--scan-count`, `--scan-workers`, `--scan-timeout`, `--download`, `--rescan`, `--scan-cache`, `--sni-list`, `--ip-ranges`, `--fetch-ranges` CLI flags.
-- Added 42 new unit tests for the scanner, SNI provider, probe, and failover modules (71 total).
+- Added 42 new unit tests for the scanner, SNI provider, probe, and failover modules.
 - Bumped version to 1.2.0.
 
 ### v1.1.0

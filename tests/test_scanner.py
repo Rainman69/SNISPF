@@ -9,7 +9,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sni_spoofing.scanner.ip_ranges import CloudflareIPPool, CLOUDFLARE_IPV4_RANGES
+from sni_spoofing.scanner.ip_ranges import CloudflareIPPool, CLOUDFLARE_IPV4_RANGES, CLOUDFLARE_SEED_IPS
 from sni_spoofing.scanner.probe import IPProbe, ProbeResult
 from sni_spoofing.scanner.sni_provider import SNIProvider, DEFAULT_SNI_DOMAINS
 from sni_spoofing.scanner.engine import ScanEngine, ScanConfig
@@ -24,6 +24,41 @@ class TestCloudflareIPPool(unittest.TestCase):
         pool.load_defaults()
         self.assertGreater(pool.network_count, 10)
         self.assertGreater(pool.total_hosts, 1000)
+
+    def test_seed_ips_in_cloudflare_ranges(self):
+        """All seed IPs must belong to Cloudflare ranges."""
+        pool = CloudflareIPPool()
+        pool.load_defaults()
+        for ip in CLOUDFLARE_SEED_IPS:
+            self.assertTrue(
+                pool.contains(ip),
+                f"Seed IP {ip} is NOT in any Cloudflare range!",
+            )
+
+    def test_seed_ips_not_empty(self):
+        """Seed list must have a meaningful number of IPs."""
+        self.assertGreater(len(CLOUDFLARE_SEED_IPS), 50)
+
+    def test_sample_with_seeds(self):
+        """sample_with_seeds should return seed IPs first."""
+        pool = CloudflareIPPool()
+        pool.load_defaults()
+        ips = pool.sample_with_seeds(10)
+        self.assertEqual(len(ips), 10)
+        # At least some should be from the seed list
+        seed_set = set(CLOUDFLARE_SEED_IPS)
+        seed_count = sum(1 for ip in ips if ip in seed_set)
+        self.assertGreater(seed_count, 0)
+
+    def test_sample_with_seeds_respects_blacklist(self):
+        """Blacklisted seed IPs should be skipped."""
+        pool = CloudflareIPPool()
+        pool.load_defaults()
+        for ip in CLOUDFLARE_SEED_IPS[:5]:
+            pool.blacklist_ip(ip)
+        ips = pool.sample_with_seeds(20)
+        for ip in CLOUDFLARE_SEED_IPS[:5]:
+            self.assertNotIn(ip, ips)
 
     def test_random_ip_from_defaults(self):
         """Random IPs should be valid IPv4 addresses in Cloudflare ranges."""
@@ -351,7 +386,26 @@ class TestModuleImports(unittest.TestCase):
     def test_sni_defaults(self):
         from sni_spoofing.scanner.sni_provider import DEFAULT_SNI_DOMAINS
         self.assertIsInstance(DEFAULT_SNI_DOMAINS, list)
-        self.assertGreater(len(DEFAULT_SNI_DOMAINS), 5)
+        self.assertGreater(len(DEFAULT_SNI_DOMAINS), 15)
+
+    def test_sni_defaults_no_non_cloudflare_domains(self):
+        """Default SNI list must NOT contain known non-Cloudflare domains."""
+        from sni_spoofing.scanner.sni_provider import DEFAULT_SNI_DOMAINS
+        non_cf = {
+            "dl.google.com", "cdn.shopify.com", "www.figma.com",
+            "fonts.googleapis.com", "cdn.jsdelivr.net", "www.notion.so",
+            "www.zoom.us",
+        }
+        for d in DEFAULT_SNI_DOMAINS:
+            self.assertNotIn(
+                d, non_cf,
+                f"{d} is NOT behind Cloudflare and should not be in defaults!",
+            )
+
+    def test_seed_ips_importable(self):
+        from sni_spoofing.scanner import CLOUDFLARE_SEED_IPS
+        self.assertIsInstance(CLOUDFLARE_SEED_IPS, list)
+        self.assertGreater(len(CLOUDFLARE_SEED_IPS), 50)
 
 
 if __name__ == "__main__":

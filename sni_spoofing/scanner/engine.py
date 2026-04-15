@@ -101,7 +101,12 @@ class ScanEngine:
     # ── One-shot scan ─────────────────────────────────────────────────
 
     def scan_once(self, progress_cb: Optional[Callable] = None) -> List[ProbeResult]:
-        """Scan *config.scan_count* random Cloudflare IPs.
+        """Scan *config.scan_count* Cloudflare IPs.
+
+        Uses pre-resolved seed IPs first (no DNS needed), then tops up
+        with random IPs from the CIDR pool.  This is critical for networks
+        with DNS poisoning (e.g. Iran) where DNS resolution of Cloudflare
+        domains may return bogus results.
 
         Returns results sorted by score (best first).  Optionally calls
         *progress_cb(done, total)* as probes finish.
@@ -109,7 +114,7 @@ class ScanEngine:
         Uses a thread pool for parallelism since each probe is
         I/O-bound (TCP + TLS).
         """
-        ips = self.pool.sample(self.config.scan_count)
+        ips = self.pool.sample_with_seeds(self.config.scan_count)
         sni = self.config.sni or self.sni_provider.get_best()
 
         probe = IPProbe(

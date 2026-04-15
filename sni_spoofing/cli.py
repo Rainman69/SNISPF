@@ -8,8 +8,8 @@ selection and failover.
 
 Usage:
     snispf --config config.json
-    snispf --listen 0.0.0.0:40443 --connect 188.114.98.0:443 --sni auth.vercel.com
-    snispf --scan --scan-count 100 --sni auth.vercel.com
+    snispf --listen 0.0.0.0:40443 --connect 104.18.38.202:443 --sni cdnjs.cloudflare.com
+    snispf --scan --scan-count 100 --sni cdnjs.cloudflare.com
     snispf --auto
 """
 
@@ -95,9 +95,9 @@ def setup_logging(verbose: bool = False, quiet: bool = False):
 DEFAULT_CONFIG = {
     "LISTEN_HOST": "0.0.0.0",
     "LISTEN_PORT": 40443,
-    "CONNECT_IP": "188.114.98.0",
+    "CONNECT_IP": "104.18.38.202",
     "CONNECT_PORT": 443,
-    "FAKE_SNI": "auth.vercel.com",
+    "FAKE_SNI": "cdnjs.cloudflare.com",
     "BYPASS_METHOD": "fragment",
     "FRAGMENT_STRATEGY": "sni_split",
     "FRAGMENT_DELAY": 0.1,
@@ -141,9 +141,9 @@ def generate_config(output_path: str):
     config = {
         "LISTEN_HOST": "0.0.0.0",
         "LISTEN_PORT": 40443,
-        "CONNECT_IP": "188.114.98.0",
+        "CONNECT_IP": "104.18.38.202",
         "CONNECT_PORT": 443,
-        "FAKE_SNI": "auth.vercel.com",
+        "FAKE_SNI": "cdnjs.cloudflare.com",
         "BYPASS_METHOD": "fragment",
         "FRAGMENT_STRATEGY": "sni_split",
         "FRAGMENT_DELAY": 0.1,
@@ -221,8 +221,8 @@ def parse_args():
         epilog=(
             "Examples:\n"
             "  %(prog)s --config config.json\n"
-            "  %(prog)s -l 0.0.0.0:40443 -c 188.114.98.0:443 -s auth.vercel.com\n"
-            "  %(prog)s -l :40443 -c 188.114.98.0:443 -s dl.google.com -m combined\n"
+            "  %(prog)s -l 0.0.0.0:40443 -c 104.18.38.202:443 -s cdnjs.cloudflare.com\n"
+            "  %(prog)s -l :40443 -c 104.18.38.202:443 -s www.speedtest.net -m combined\n"
             "  %(prog)s --generate-config my_config.json\n"
             "\nScanner Mode:\n"
             "  %(prog)s --scan                        Run a one-shot IP scan\n"
@@ -260,12 +260,12 @@ def parse_args():
     parser.add_argument(
         "--connect", "-c",
         metavar="IP:PORT",
-        help="Target server address (default: 188.114.98.0:443)",
+        help="Target server address (default: 104.18.38.202:443)",
     )
     parser.add_argument(
         "--sni", "-s",
         metavar="HOSTNAME",
-        help="Fake SNI hostname (default: auth.vercel.com)",
+        help="Fake SNI hostname (default: cdnjs.cloudflare.com)",
     )
 
     # Bypass settings
@@ -509,7 +509,7 @@ def run_scan(args, config: dict, logger):
             print(f"  Download Speed: {best.download_speed / 1024:.1f} KB/s")
         print(f"{'─' * 70}")
         print(f"\n  Use this IP with:")
-        print(f"    snispf -l :40443 -c {best.ip}:443 -s {best.sni or 'auth.vercel.com'}")
+        print(f"    snispf -l :40443 -c {best.ip}:443 -s {best.sni or 'cdnjs.cloudflare.com'}")
     else:
         print("\n  No working IPs found.  Try increasing --scan-count or")
         print("  using a different --sni.")
@@ -552,7 +552,7 @@ def main():
         config["LISTEN_PORT"] = port
 
     if args.connect:
-        host, port = parse_host_port(args.connect, "188.114.98.0", 443)
+        host, port = parse_host_port(args.connect, "104.18.38.202", 443)
         config["CONNECT_IP"] = host
         config["CONNECT_PORT"] = port
 
