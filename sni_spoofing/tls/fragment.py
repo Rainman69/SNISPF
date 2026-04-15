@@ -138,6 +138,9 @@ def fragment_data(data: bytes, sizes: List[int]) -> List[bytes]:
     Returns:
         List of byte fragments
     """
+    if not sizes or not data:
+        return [data] if data else []
+
     fragments = []
     pos = 0
     for i, size in enumerate(sizes):
@@ -146,12 +149,13 @@ def fragment_data(data: bytes, sizes: List[int]) -> List[bytes]:
         if i == len(sizes) - 1:
             # Last specified size: include all remaining data
             fragments.append(data[pos:])
+            pos = len(data)
         else:
             fragments.append(data[pos : pos + size])
             pos += size
 
     # If we consumed all specified sizes but data remains
-    if pos < len(data) and len(fragments) < len(sizes):
+    if pos < len(data):
         fragments.append(data[pos:])
 
     return fragments if fragments else [data]
