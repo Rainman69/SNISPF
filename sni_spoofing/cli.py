@@ -3,10 +3,14 @@ SNISPF - Cross-platform SNI spoofing and DPI bypass tool.
 
 Works on Windows, macOS, and Linux without requiring kernel drivers.
 On Linux with root, enables raw packet injection for the seq_id trick.
+Includes an internal Cloudflare IP scanner for automatic endpoint
+selection and failover.
 
 Usage:
     snispf --config config.json
     snispf --listen 0.0.0.0:40443 --connect 188.114.98.0:443 --sni auth.vercel.com
+    snispf --scan --scan-count 100 --sni auth.vercel.com
+    snispf --auto
 """
 
 import argparse
@@ -53,7 +57,7 @@ BANNER = r"""
 
      ┌──────────────────────────────────────────────────────────────────┐
      │  SNISPF - Cross-Platform DPI Bypass Tool                        │
-     │  SNI Spoofing + TLS Fragmentation                               │
+     │  SNI Spoofing + TLS Fragmentation + Auto Scanner                │
      │  Works on Windows / macOS / Linux                               │
      │  https://github.com/Rainman69/SNISPF                            │
      └──────────────────────────────────────────────────────────────────┘
@@ -62,7 +66,7 @@ BANNER = r"""
 # ─── Logging ─────────────────────────────────────────────────────────────────
 
 def setup_logging(verbose: bool = False, quiet: bool = False):
-    """Configure logging."""
+    """Configure logging with deduplication guard."""
     if quiet:
         level = logging.WARNING
     elif verbose:
@@ -75,12 +79,13 @@ def setup_logging(verbose: bool = False, quiet: bool = False):
         datefmt="%H:%M:%S",
     )
 
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(formatter)
-
     logger = logging.getLogger("snispf")
+    # Prevent handler accumulation on repeated calls
+    if not logger.handlers:
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
     logger.setLevel(level)
-    logger.addHandler(handler)
 
     return logger
 
@@ -98,6 +103,18 @@ DEFAULT_CONFIG = {
     "FRAGMENT_DELAY": 0.1,
     "USE_TTL_TRICK": False,
     "FAKE_SNI_METHOD": "prefix_fake",
+    # Scanner settings
+    "SCANNER_ENABLED": False,
+    "SCANNER_COUNT": 100,
+    "SCANNER_CONCURRENCY": 16,
+    "SCANNER_TIMEOUT": 4.0,
+    "SCANNER_TEST_DOWNLOAD": False,
+    "SCANNER_RESCAN_INTERVAL": 0,
+    "SCANNER_CACHE": "",
+    "SCANNER_TOP_N": 10,
+    "SCANNER_CUSTOM_RANGES": [],
+    # SNI domain pool
+    "SNI_DOMAINS": [],
 }
 
 
@@ -132,6 +149,16 @@ def generate_config(output_path: str):
         "FRAGMENT_DELAY": 0.1,
         "USE_TTL_TRICK": False,
         "FAKE_SNI_METHOD": "prefix_fake",
+        "SCANNER_ENABLED": False,
+        "SCANNER_COUNT": 100,
+        "SCANNER_CONCURRENCY": 16,
+        "SCANNER_TIMEOUT": 4.0,
+        "SCANNER_TEST_DOWNLOAD": False,
+        "SCANNER_RESCAN_INTERVAL": 0,
+        "SCANNER_CACHE": "",
+        "SCANNER_TOP_N": 10,
+        "SCANNER_CUSTOM_RANGES": [],
+        "SNI_DOMAINS": [],
     }
 
     with open(output_path, "w") as f:
@@ -186,7 +213,9 @@ def parse_args():
             "SNISPF - Cross-platform DPI bypass tool.\n\n"
             "This tool forwards TCP connections while applying DPI bypass\n"
             "techniques (SNI spoofing, TLS fragmentation) to circumvent\n"
-            "internet censorship."
+            "internet censorship.\n\n"
+            "Includes an internal Cloudflare IP scanner that automatically\n"
+            "finds the fastest clean IPs and rotates when they are blocked."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
@@ -195,15 +224,18 @@ def parse_args():
             "  %(prog)s -l 0.0.0.0:40443 -c 188.114.98.0:443 -s auth.vercel.com\n"
             "  %(prog)s -l :40443 -c 188.114.98.0:443 -s dl.google.com -m combined\n"
             "  %(prog)s --generate-config my_config.json\n"
+            "\nScanner Mode:\n"
+            "  %(prog)s --scan                        Run a one-shot IP scan\n"
+            "  %(prog)s --scan --scan-count 200       Scan 200 IPs\n"
+            "  %(prog)s --scan --download              Include download speed tests\n"
+            "\nAuto Mode (scanner + proxy):\n"
+            "  %(prog)s --auto                        Scan, pick best IP, start proxy\n"
+            "  %(prog)s --auto --rescan 300           Re-scan every 5 minutes\n"
+            "  %(prog)s --auto --sni-list a.com,b.com Custom SNI domains\n"
             "\nBypass Methods:\n"
             "  fragment   - Fragment TLS ClientHello at SNI boundary (default)\n"
             "  fake_sni   - Inject fake ClientHello (needs root for seq_id trick)\n"
             "  combined   - Both fragmentation and fake SNI (most effective)\n"
-            "\nFragment Strategies (for fragment/combined methods):\n"
-            "  sni_split        - Split in middle of SNI value (default)\n"
-            "  half             - Split record in half\n"
-            "  multi            - Split into many small fragments\n"
-            "  tls_record_frag  - Use TLS-level record fragmentation\n"
             "\nhttps://github.com/Rainman69/SNISPF"
         ),
     )
@@ -264,6 +296,72 @@ def parse_args():
         help="Disable raw socket injection even if available",
     )
 
+    # ─── Scanner ──────────────────────────────────────────────────────
+    scanner_group = parser.add_argument_group("Scanner Options")
+    scanner_group.add_argument(
+        "--scan",
+        action="store_true",
+        help="Run a one-shot Cloudflare IP scan and display results",
+    )
+    scanner_group.add_argument(
+        "--auto",
+        action="store_true",
+        help="Auto mode: scan for best IP, then start proxy with failover",
+    )
+    scanner_group.add_argument(
+        "--scan-count",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Number of IPs to test per scan (default: 100)",
+    )
+    scanner_group.add_argument(
+        "--scan-workers",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Parallel scan workers (default: 16)",
+    )
+    scanner_group.add_argument(
+        "--scan-timeout",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="Per-probe timeout (default: 4.0)",
+    )
+    scanner_group.add_argument(
+        "--download",
+        action="store_true",
+        help="Include download speed test during scan",
+    )
+    scanner_group.add_argument(
+        "--rescan",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="Re-scan interval in seconds (0 = one-shot, default: 0)",
+    )
+    scanner_group.add_argument(
+        "--scan-cache",
+        metavar="PATH",
+        help="File to cache scan results across runs",
+    )
+    scanner_group.add_argument(
+        "--sni-list",
+        metavar="DOMAINS",
+        help="Comma-separated list of SNI domains for rotation",
+    )
+    scanner_group.add_argument(
+        "--ip-ranges",
+        metavar="CIDRS",
+        help="Comma-separated custom CIDR ranges to scan",
+    )
+    scanner_group.add_argument(
+        "--fetch-ranges",
+        action="store_true",
+        help="Fetch live Cloudflare IP ranges before scanning",
+    )
+
     # Output settings
     parser.add_argument(
         "--verbose", "-v",
@@ -290,17 +388,25 @@ def parse_args():
 
 
 def parse_host_port(addr: str, default_host: str = "0.0.0.0", default_port: int = 443) -> tuple:
-    """Parse HOST:PORT string."""
+    """Parse HOST:PORT string.  Returns (host, port)."""
     if not addr:
         return default_host, default_port
 
     if addr.startswith(":"):
-        return default_host, int(addr[1:])
+        try:
+            return default_host, int(addr[1:])
+        except ValueError:
+            print(f"Error: Invalid port in '{addr}'")
+            sys.exit(1)
 
     parts = addr.rsplit(":", 1)
     if len(parts) == 2:
         host = parts[0] or default_host
-        port = int(parts[1])
+        try:
+            port = int(parts[1])
+        except ValueError:
+            print(f"Error: Invalid port in '{addr}'")
+            sys.exit(1)
         return host, port
     else:
         return parts[0], default_port
@@ -335,6 +441,80 @@ def show_platform_info():
         print("  ★ Recommended: fragment or combined")
         if platform.system() != "Windows":
             print("  ℹ  Run with sudo/root for raw injection (seq_id trick)")
+
+    print("\nScanner:")
+    print("  ✓ Cloudflare IP scanner available (no special privileges)")
+    print("  ★ Use --scan to find the fastest clean IP")
+    print("  ★ Use --auto for automatic IP selection + failover")
+
+
+# ─── Scanner Command ─────────────────────────────────────────────────────────
+
+def run_scan(args, config: dict, logger):
+    """Execute a one-shot scan and print results."""
+    from sni_spoofing.scanner import ScanEngine, ScanConfig, SNIProvider
+
+    sni_domains = None
+    if args.sni_list:
+        sni_domains = [d.strip() for d in args.sni_list.split(",") if d.strip()]
+    elif config.get("SNI_DOMAINS"):
+        sni_domains = config["SNI_DOMAINS"]
+
+    sni_provider = SNIProvider(domains=sni_domains)
+
+    custom_ranges = []
+    if args.ip_ranges:
+        custom_ranges = [r.strip() for r in args.ip_ranges.split(",") if r.strip()]
+    elif config.get("SCANNER_CUSTOM_RANGES"):
+        custom_ranges = config["SCANNER_CUSTOM_RANGES"]
+
+    scan_cfg = ScanConfig(
+        scan_count=args.scan_count or config.get("SCANNER_COUNT", 100),
+        concurrency=args.scan_workers or config.get("SCANNER_CONCURRENCY", 16),
+        timeout=args.scan_timeout or config.get("SCANNER_TIMEOUT", 4.0),
+        test_download=args.download or config.get("SCANNER_TEST_DOWNLOAD", False),
+        port=config.get("CONNECT_PORT", 443),
+        sni=config.get("FAKE_SNI", "") if not sni_domains else "",
+        custom_ranges=custom_ranges,
+        fetch_live_ranges=args.fetch_ranges,
+        cache_path=args.scan_cache or config.get("SCANNER_CACHE", ""),
+        top_n=config.get("SCANNER_TOP_N", 10),
+    )
+
+    engine = ScanEngine(scan_cfg, sni_provider=sni_provider)
+
+    # Progress display
+    def progress(done, total):
+        pct = done * 100 // total
+        bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
+        print(f"\r  Scanning: [{bar}] {done}/{total} ({pct}%)", end="", flush=True)
+
+    results = engine.scan_once(progress_cb=progress)
+    print()  # newline after progress bar
+
+    # Display results
+    alive = [r for r in results if r.alive]
+    print(f"\n{'═' * 70}")
+    print(f"  Scan Results: {len(alive)}/{len(results)} IPs alive")
+    print(f"{'═' * 70}")
+    print(engine.results_table())
+
+    if alive:
+        best = alive[0]
+        print(f"\n{'─' * 70}")
+        print(f"  Best IP: {best.ip}")
+        print(f"  TCP Latency: {best.tcp_ms:.0f}ms")
+        print(f"  TLS Latency: {best.tls_ms:.0f}ms")
+        if best.download_ok:
+            print(f"  Download Speed: {best.download_speed / 1024:.1f} KB/s")
+        print(f"{'─' * 70}")
+        print(f"\n  Use this IP with:")
+        print(f"    snispf -l :40443 -c {best.ip}:443 -s {best.sni or 'auth.vercel.com'}")
+    else:
+        print("\n  No working IPs found.  Try increasing --scan-count or")
+        print("  using a different --sni.")
+
+    return engine
 
 
 # ─── Main ────────────────────────────────────────────────────────────────────
@@ -391,7 +571,12 @@ def main():
     if args.ttl_trick:
         config["USE_TTL_TRICK"] = True
 
-    # Validate configuration
+    # ── Scan-only mode ────────────────────────────────────────────────
+    if args.scan and not args.auto:
+        run_scan(args, config, logger)
+        return
+
+    # ── Validate config ───────────────────────────────────────────────
     if not is_valid_port(config["LISTEN_PORT"]):
         print(f"Error: Invalid listen port: {config['LISTEN_PORT']}")
         sys.exit(1)
@@ -407,7 +592,81 @@ def main():
     interface_ip = get_default_interface_ipv4(config["CONNECT_IP"])
     logger.info(f"Default interface: {interface_ip or 'auto'}")
 
-    # Try to start raw injector (Linux + root only)
+    # ── Scanner + SNI provider setup ──────────────────────────────────
+    scan_engine = None
+    sni_provider = None
+
+    auto_mode = args.auto or config.get("SCANNER_ENABLED", False)
+
+    if auto_mode:
+        from sni_spoofing.scanner import ScanEngine, ScanConfig, SNIProvider
+
+        sni_domains = None
+        if args.sni_list:
+            sni_domains = [d.strip() for d in args.sni_list.split(",") if d.strip()]
+        elif config.get("SNI_DOMAINS"):
+            sni_domains = config["SNI_DOMAINS"]
+
+        sni_provider = SNIProvider(domains=sni_domains)
+
+        custom_ranges = []
+        if args.ip_ranges:
+            custom_ranges = [r.strip() for r in args.ip_ranges.split(",") if r.strip()]
+        elif config.get("SCANNER_CUSTOM_RANGES"):
+            custom_ranges = config["SCANNER_CUSTOM_RANGES"]
+
+        rescan = 0.0
+        if args.rescan is not None:
+            rescan = args.rescan
+        elif config.get("SCANNER_RESCAN_INTERVAL", 0) > 0:
+            rescan = config["SCANNER_RESCAN_INTERVAL"]
+
+        scan_cfg = ScanConfig(
+            scan_count=args.scan_count or config.get("SCANNER_COUNT", 100),
+            concurrency=args.scan_workers or config.get("SCANNER_CONCURRENCY", 16),
+            timeout=args.scan_timeout or config.get("SCANNER_TIMEOUT", 4.0),
+            test_download=args.download or config.get("SCANNER_TEST_DOWNLOAD", False),
+            port=config.get("CONNECT_PORT", 443),
+            sni=config.get("FAKE_SNI", "") if not sni_domains else "",
+            custom_ranges=custom_ranges,
+            fetch_live_ranges=getattr(args, "fetch_ranges", False),
+            cache_path=args.scan_cache or config.get("SCANNER_CACHE", ""),
+            top_n=config.get("SCANNER_TOP_N", 10),
+            rescan_interval=rescan,
+        )
+
+        scan_engine = ScanEngine(scan_cfg, sni_provider=sni_provider)
+
+        # Run initial scan with progress
+        def progress(done, total):
+            pct = done * 100 // total
+            bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
+            print(f"\r  Scanning: [{bar}] {done}/{total} ({pct}%)", end="", flush=True)
+
+        logger.info("Running initial Cloudflare IP scan...")
+        results = scan_engine.scan_once(progress_cb=progress)
+        print()  # newline after progress bar
+
+        alive = [r for r in results if r.alive]
+        if alive:
+            best = alive[0]
+            logger.info(
+                "Best IP: %s (tcp=%dms tls=%dms)",
+                best.ip, best.tcp_ms, best.tls_ms,
+            )
+            # Update config with scanned IP
+            config["CONNECT_IP"] = best.ip
+        else:
+            logger.warning(
+                "No working IPs found in scan.  Using fallback: %s",
+                config["CONNECT_IP"],
+            )
+
+        # Start background rescanning if interval is set
+        if rescan > 0:
+            scan_engine.start_background()
+
+    # ── Raw injector setup ────────────────────────────────────────────
     raw_injector = None
     use_raw = not getattr(args, 'no_raw', False)
     method = config.get("BYPASS_METHOD", "fragment").lower()
@@ -451,6 +710,8 @@ def main():
         print("\n\nShutting down...")
         if raw_injector:
             raw_injector.stop()
+        if scan_engine:
+            scan_engine.stop_background()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
@@ -469,6 +730,8 @@ def main():
                 bypass_strategy=strategy,
                 interface_ip=interface_ip,
                 raw_injector=raw_injector,
+                scan_engine=scan_engine,
+                sni_provider=sni_provider,
             )
         )
     except KeyboardInterrupt:
@@ -489,6 +752,8 @@ def main():
     finally:
         if raw_injector:
             raw_injector.stop()
+        if scan_engine:
+            scan_engine.stop_background()
 
 
 if __name__ == "__main__":

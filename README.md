@@ -1,6 +1,6 @@
 # SNISPF
 
-### Cross-Platform DPI Bypass Tool
+### Cross-Platform DPI Bypass Tool with Automatic IP Scanner
 
 ```
  ███████╗███╗   ██╗██╗███████╗██████╗ ███████╗
@@ -12,6 +12,8 @@
 ```
 
 **SNISPF** is a lightweight command-line tool that helps you get past internet censorship. It works by messing with the way your connection introduces itself to firewalls, so filtered websites slip through undetected. Runs on **Windows, macOS, and Linux** -- no drivers, no admin rights needed for most features.
+
+**New in v1.2.0:** Built-in Cloudflare IP scanner with automatic endpoint selection, SNI rotation, and real-time failover. No more guessing which IP to use -- SNISPF finds the fastest clean IP for your network automatically.
 
 **Maintained by [@Rainman69](https://github.com/Rainman69)**
 ---
@@ -28,6 +30,15 @@
 - [Quick Start Guide](#quick-start-guide)
   - [Step 1: Start the tool](#step-1-start-the-tool)
   - [Step 2: Point your app at it](#step-2-point-your-app-at-it)
+- [Auto Mode (Recommended)](#auto-mode-recommended)
+- [IP Scanner](#ip-scanner)
+  - [One-shot scan](#one-shot-scan)
+  - [Scan with download speed test](#scan-with-download-speed-test)
+  - [Custom IP ranges](#custom-ip-ranges)
+  - [Custom SNI domains](#custom-sni-domains)
+  - [Background rescanning](#background-rescanning)
+  - [Caching results](#caching-results)
+- [SNI Domain Rotation](#sni-domain-rotation)
 - [Configuration](#configuration)
   - [Using a config file](#using-a-config-file)
   - [Using command-line flags](#using-command-line-flags)
@@ -65,6 +76,21 @@ SNISPF sits between your app and the internet. It intercepts that "hello" messag
                       │ sends fake /  │ sees fake or
                       │ fragmented    │ incomplete SNI
                       │ hello message │ --> lets it through
+```
+
+**With the built-in scanner**, SNISPF also automatically finds the fastest reachable Cloudflare IP for your network:
+
+```
+┌─────────────────┐     ┌─────────────────────────────────────┐
+│  SNISPF Scanner  │────>│  Tests 100+ Cloudflare IPs:        │
+│                  │     │  1. TCP connect  (latency)          │
+│  Runs at startup │     │  2. TLS handshake (reachability)    │
+│  + periodically  │     │  3. Download test (speed, optional) │
+└────────┬────────┘     └──────────────────┬──────────────────┘
+         │                                  │
+         │  Picks fastest IP ──────────────>│
+         │                                  │
+         │  If blocked at runtime ─────────>│  Failover to next best
 ```
 
 ---
@@ -154,7 +180,7 @@ What each part means:
 | `-c` | The real server IP and port to forward traffic to | `188.114.98.0:443` (a Cloudflare IP) |
 | `-s` | The fake website name to show the firewall | `auth.vercel.com` (an allowed domain) |
 
-> **Tip:** If you're not sure what IP or fake SNI to use, the defaults above work for many Cloudflare-based setups.
+> **Tip:** If you're not sure what IP or fake SNI to use, try **auto mode** instead. It figures everything out for you.
 
 ### Step 2: Point your app at it
 
@@ -166,6 +192,151 @@ Port:    40443
 ```
 
 That's it. Your traffic now goes through SNISPF, which handles the bypass automatically.
+
+---
+
+## Auto Mode (Recommended)
+
+Auto mode is the easiest way to use SNISPF. It scans Cloudflare IPs, picks the fastest one, starts the proxy, and automatically switches to another IP if the current one gets blocked.
+
+```bash
+# Scan + start proxy with automatic failover
+snispf --auto
+
+# Scan + start proxy + re-scan every 5 minutes
+snispf --auto --rescan 300
+
+# Auto mode with the strongest bypass method
+snispf --auto -m combined
+
+# Auto mode with custom SNI domains
+snispf --auto --sni-list "dl.google.com,www.speedtest.net,cdnjs.cloudflare.com"
+
+# Auto mode with verbose logging to see what's happening
+snispf --auto -v
+```
+
+What auto mode does:
+
+1. **Scans** 100 random Cloudflare IPs (configurable with `--scan-count`)
+2. **Tests** each one for TCP latency, TLS handshake, and optionally download speed
+3. **Picks** the fastest working IP
+4. **Starts** the proxy, forwarding your traffic through that IP
+5. **Monitors** connections -- if the IP gets blocked, it automatically switches to the next best one
+6. **Rescans** periodically (if `--rescan` is set) to keep the IP list fresh
+
+---
+
+## IP Scanner
+
+The built-in scanner tests Cloudflare IP addresses from their published CIDR ranges and ranks them by latency and reachability. This is useful for finding "clean" IPs that aren't filtered on your network.
+
+### One-shot scan
+
+Run a scan and see the results without starting the proxy:
+
+```bash
+snispf --scan
+```
+
+Output:
+
+```
+  Scanning: [████████████████████] 100/100 (100%)
+
+══════════════════════════════════════════════════════════════════════
+  Scan Results: 67/100 IPs alive
+══════════════════════════════════════════════════════════════════════
+  #  IP                      TCP      TLS      Speed    Score  Status
+----------------------------------------------------------------------
+  1  104.18.42.139           12ms     28ms         -       40  OK
+  2  172.67.181.22           14ms     31ms         -       45  OK
+  3  104.21.55.17            15ms     35ms         -       50  OK
+  ...
+
+  Best IP: 104.18.42.139
+  TCP Latency: 12ms
+  TLS Latency: 28ms
+
+  Use this IP with:
+    snispf -l :40443 -c 104.18.42.139:443 -s auth.vercel.com
+```
+
+### Scan with download speed test
+
+Add `--download` to also test download throughput:
+
+```bash
+snispf --scan --download
+```
+
+### Custom IP ranges
+
+By default, the scanner uses all official Cloudflare IPv4 ranges. You can add your own:
+
+```bash
+# Scan only specific ranges
+snispf --scan --ip-ranges "104.16.0.0/13,172.64.0.0/13"
+
+# Fetch the latest ranges from Cloudflare before scanning
+snispf --scan --fetch-ranges
+```
+
+### Custom SNI domains
+
+You can specify which SNI domains to use for probing:
+
+```bash
+snispf --scan --sni-list "dl.google.com,www.speedtest.net,cdnjs.cloudflare.com"
+```
+
+### Background rescanning
+
+In auto mode, use `--rescan` to periodically re-scan and update the best IP:
+
+```bash
+snispf --auto --rescan 300   # Re-scan every 5 minutes
+snispf --auto --rescan 600   # Re-scan every 10 minutes
+```
+
+### Caching results
+
+Save scan results to disk so the next startup is instant:
+
+```bash
+snispf --auto --scan-cache results.json
+```
+
+On the next run, SNISPF loads the cached results first and starts immediately, then runs a fresh scan in the background.
+
+---
+
+## SNI Domain Rotation
+
+SNISPF maintains a pool of SNI domains (Cloudflare-fronted sites) and rotates between them automatically. If a particular SNI gets blocked, the tool switches to another one.
+
+Built-in SNI domains include:
+
+- `auth.vercel.com`
+- `dl.google.com`
+- `www.speedtest.net`
+- `cdnjs.cloudflare.com`
+- `ajax.cloudflare.com`
+- `registry.npmjs.org`
+- `cdn.shopify.com`
+- and more...
+
+You can override or extend the list:
+
+```bash
+# CLI
+snispf --auto --sni-list "my-domain1.com,my-domain2.com"
+
+# Config file
+{
+  "SNI_DOMAINS": ["my-domain1.com", "my-domain2.com", "my-domain3.com"]
+}
+```
 
 ---
 
@@ -196,6 +367,9 @@ snispf -l :40443 -c 188.114.98.0:443 -s auth.vercel.com
 # Use the strongest bypass method
 snispf -l :40443 -c 188.114.98.0:443 -s dl.google.com -m combined
 
+# Auto mode with scanner
+snispf --auto -m combined --rescan 300
+
 # See verbose debug output
 snispf -l :40443 -c 188.114.98.0:443 -s auth.vercel.com -v
 
@@ -218,7 +392,17 @@ Here's what each field in `config.json` does:
   "FRAGMENT_STRATEGY": "sni_split",
   "FRAGMENT_DELAY": 0.1,
   "USE_TTL_TRICK": false,
-  "FAKE_SNI_METHOD": "prefix_fake"
+  "FAKE_SNI_METHOD": "prefix_fake",
+  "SCANNER_ENABLED": false,
+  "SCANNER_COUNT": 100,
+  "SCANNER_CONCURRENCY": 16,
+  "SCANNER_TIMEOUT": 4.0,
+  "SCANNER_TEST_DOWNLOAD": false,
+  "SCANNER_RESCAN_INTERVAL": 0,
+  "SCANNER_CACHE": "",
+  "SCANNER_TOP_N": 10,
+  "SCANNER_CUSTOM_RANGES": [],
+  "SNI_DOMAINS": []
 }
 ```
 
@@ -234,6 +418,16 @@ Here's what each field in `config.json` does:
 | `FRAGMENT_DELAY` | How long to wait between sending fragments (in seconds). | `0.1` |
 | `USE_TTL_TRICK` | Use the IP TTL trick for extra stealth. Needs root/admin. | `false` |
 | `FAKE_SNI_METHOD` | Sub-method for fake_sni: `prefix_fake`, `ttl_trick`, or `disorder`. | `prefix_fake` |
+| `SCANNER_ENABLED` | Enable the auto-scanner (same as `--auto` flag). | `false` |
+| `SCANNER_COUNT` | How many random IPs to test per scan. | `100` |
+| `SCANNER_CONCURRENCY` | Parallel scan workers. | `16` |
+| `SCANNER_TIMEOUT` | Per-probe timeout in seconds. | `4.0` |
+| `SCANNER_TEST_DOWNLOAD` | Include download speed test. | `false` |
+| `SCANNER_RESCAN_INTERVAL` | Re-scan every N seconds (0 = one-shot). | `0` |
+| `SCANNER_CACHE` | File path to cache results. | `""` |
+| `SCANNER_TOP_N` | Keep top N results. | `10` |
+| `SCANNER_CUSTOM_RANGES` | Custom CIDR ranges to scan. | `[]` |
+| `SNI_DOMAINS` | Custom SNI domain list for rotation. | `[]` (uses built-in list) |
 
 ### All CLI flags
 
@@ -242,7 +436,11 @@ usage: snispf [-h] [--config CONFIG] [--generate-config PATH]
               [--listen HOST:PORT] [--connect IP:PORT] [--sni HOSTNAME]
               [--method {fragment,fake_sni,combined}]
               [--fragment-strategy {sni_split,half,multi,tls_record_frag}]
-              [--fragment-delay SECONDS] [--ttl-trick]
+              [--fragment-delay SECONDS] [--ttl-trick] [--no-raw]
+              [--scan] [--auto] [--scan-count N] [--scan-workers N]
+              [--scan-timeout SECONDS] [--download] [--rescan SECONDS]
+              [--scan-cache PATH] [--sni-list DOMAINS] [--ip-ranges CIDRS]
+              [--fetch-ranges]
               [--verbose] [--quiet] [--version] [--info]
 ```
 
@@ -258,6 +456,17 @@ usage: snispf [-h] [--config CONFIG] [--generate-config PATH]
 | `--fragment-delay` | | Seconds to wait between fragments |
 | `--ttl-trick` | | Enable TTL trick (needs elevated privileges) |
 | `--no-raw` | | Disable raw socket injection even if available |
+| `--scan` | | Run a one-shot IP scan and display results |
+| `--auto` | | Auto mode: scan, pick best IP, start proxy with failover |
+| `--scan-count` | | Number of IPs to test per scan |
+| `--scan-workers` | | Parallel scan workers |
+| `--scan-timeout` | | Per-probe timeout in seconds |
+| `--download` | | Include download speed test during scan |
+| `--rescan` | | Background re-scan interval in seconds |
+| `--scan-cache` | | File to cache scan results |
+| `--sni-list` | | Comma-separated SNI domains for rotation |
+| `--ip-ranges` | | Comma-separated custom CIDR ranges |
+| `--fetch-ranges` | | Fetch live Cloudflare IP ranges before scanning |
 | `--verbose` | `-v` | Show detailed debug output |
 | `--quiet` | `-q` | Only show warnings and errors |
 | `--version` | `-V` | Print version and exit |
@@ -347,6 +556,8 @@ snispf -l :40443 -c 188.114.98.0:443 -s auth.vercel.com --fragment-strategy mult
 
 The `fragment` method works everywhere using standard socket options (`TCP_NODELAY`). The `fake_sni` and `combined` methods are most effective on Linux with root, where they use `AF_PACKET` raw sockets to inject fake packets with out-of-window TCP sequence numbers. Without root, they fall back to fragmentation.
 
+The **scanner** works on all platforms with no special privileges.
+
 ---
 
 ## Troubleshooting
@@ -371,27 +582,54 @@ snispf -l :50443 ...
 
 Try these steps in order:
 
-1. **Switch bypass method:** `fragment` -> `combined` -> `fake_sni`
+1. **Use auto mode to find a working IP:**
    ```bash
-   snispf -l :40443 -c 188.114.98.0:443 -s auth.vercel.com -m combined
+   snispf --auto -m combined
    ```
 
-2. **Try different fragment strategies:** `sni_split` -> `multi` -> `tls_record_frag`
+2. **Switch bypass method:** `fragment` -> `combined` -> `fake_sni`
    ```bash
-   snispf -l :40443 -c 188.114.98.0:443 -s auth.vercel.com --fragment-strategy multi
+   snispf --auto -m combined
    ```
 
-3. **Increase the delay between fragments:**
+3. **Try different fragment strategies:** `sni_split` -> `multi` -> `tls_record_frag`
    ```bash
-   snispf -l :40443 -c 188.114.98.0:443 -s auth.vercel.com --fragment-delay 0.2
+   snispf --auto --fragment-strategy multi
    ```
 
-4. **Try a different fake SNI.** Pick a major website that's not blocked in your area:
+4. **Increase the delay between fragments:**
    ```bash
-   snispf -l :40443 -c 188.114.98.0:443 -s dl.google.com
+   snispf --auto --fragment-delay 0.2
    ```
 
-5. **Double-check the target IP and port.** Make sure `CONNECT_IP` actually points to the server you want.
+5. **Try a different fake SNI.** Pick a major website that's not blocked in your area:
+   ```bash
+   snispf --auto --sni-list "dl.google.com,www.speedtest.net,cdnjs.cloudflare.com"
+   ```
+
+6. **Scan more IPs.** The default 100 might not be enough:
+   ```bash
+   snispf --auto --scan-count 500
+   ```
+
+### Scanner finds no working IPs
+
+This usually means your network heavily filters Cloudflare traffic:
+
+1. Try different SNI domains:
+   ```bash
+   snispf --scan --sni-list "dl.google.com,fonts.googleapis.com"
+   ```
+
+2. Increase the timeout:
+   ```bash
+   snispf --scan --scan-timeout 8
+   ```
+
+3. Scan more IPs:
+   ```bash
+   snispf --scan --scan-count 500
+   ```
 
 ### TTL trick doesn't work
 
@@ -404,10 +642,10 @@ On Linux, consider using `combined` or `fake_sni` with `sudo` instead. The raw i
 
 ### How do I get the strongest bypass?
 
-On Linux, run as root. This enables raw packet injection which is the same technique as the original [patterniha tool](https://github.com/patterniha/SNI-Spoofing):
+On Linux, run as root with auto mode:
 
 ```bash
-sudo snispf -l :40443 -c 188.114.98.0:443 -s auth.vercel.com -m combined
+sudo snispf --auto -m combined --rescan 300
 ```
 
 ### How do I check what my system supports?
@@ -459,6 +697,46 @@ Real packet (TTL=64): Reaches the server normally
 
 The DPI sees the fake SNI and allows the traffic. The server never sees the fake packet at all.
 
+### IP Scanner Pipeline
+
+The scanner uses a three-stage probing pipeline:
+
+```
+Stage 1: TCP Connect
+  └─ Measures raw SYN/ACK latency
+  └─ Filters out unreachable / RST-blocked IPs
+
+Stage 2: TLS Handshake
+  └─ Performs a real TLS 1.2/1.3 handshake with the chosen SNI
+  └─ Verifies the IP is not SNI-filtered for that domain
+  └─ Measures handshake time
+
+Stage 3: Download Test (optional)
+  └─ Issues an HTTP GET to /cdn-cgi/trace
+  └─ Measures throughput
+
+Ranking:
+  score = tcp_latency + tls_latency - speed_bonus
+  Lower score = better IP
+```
+
+IPs are scanned in parallel using a thread pool (default 16 workers). The best results are cached and used by the proxy. When a connection fails at runtime, the IP is blacklisted and the next-best IP is used automatically.
+
+### Failover Mechanism
+
+The forwarder tracks connection failures per-IP:
+
+```
+Connection attempt fails --> record_failure(ip)
+  └─ If 3 failures within 30 seconds:
+       └─ Blacklist the IP
+       └─ Switch to next-best from scan results
+       └─ Log the failover event
+
+Connection succeeds --> record_success(ip)
+  └─ Resets failure counter
+```
+
 ---
 
 ## Project Structure
@@ -468,7 +746,7 @@ SNISPF/
 ├── sni_spoofing/               # Main package
 │   ├── __init__.py             # Version and metadata
 │   ├── cli.py                  # Command-line interface and argument parsing
-│   ├── forwarder.py            # Core async TCP forwarder
+│   ├── forwarder.py            # Core async TCP forwarder with failover
 │   ├── bypass/                 # Bypass strategy implementations
 │   │   ├── __init__.py         # Exports all strategies
 │   │   ├── base.py             # Abstract base class for strategies
@@ -476,13 +754,20 @@ SNISPF/
 │   │   ├── fake_sni.py         # Fake SNI bypass (with raw injection support)
 │   │   ├── combined.py         # Combined (fragment + fake SNI) bypass
 │   │   └── raw_injector.py     # AF_PACKET raw injection (seq_id trick)
+│   ├── scanner/                # Cloudflare IP scanner and SNI provider
+│   │   ├── __init__.py         # Package exports
+│   │   ├── ip_ranges.py        # Cloudflare CIDR pool and random IP sampling
+│   │   ├── probe.py            # TCP/TLS/download probe for single IPs
+│   │   ├── engine.py           # Concurrent scan orchestrator with caching
+│   │   └── sni_provider.py     # SNI domain list management and rotation
 │   ├── tls/                    # TLS packet handling
 │   │   ├── __init__.py         # ClientHello builder and parser
 │   │   └── fragment.py         # TLS record fragmentation logic
 │   └── utils/                  # Utility functions
 │       └── __init__.py         # Network helpers, platform detection
 ├── tests/
-│   └── test_tls.py             # Unit tests
+│   ├── test_tls.py             # Unit tests for TLS and bypass modules
+│   └── test_scanner.py         # Unit tests for scanner and SNI modules
 ├── config.json                 # Default configuration file
 ├── run.py                      # Run without installing (python run.py)
 ├── pyproject.toml              # Python package configuration
@@ -503,12 +788,27 @@ python -m pytest tests/ -v
 Or without pytest:
 
 ```bash
-python -m unittest tests.test_tls -v
+python -m unittest discover tests/ -v
 ```
 
 ---
 
 ## Changelog
+
+### v1.2.0
+
+- **Added internal Cloudflare IP scanner.** Scans random IPs from all official Cloudflare IPv4 ranges using a three-stage probe pipeline (TCP connect, TLS handshake, download speed). Probes run in parallel with configurable concurrency. Results are ranked by combined latency score.
+- **Added auto mode** (`--auto`). Runs a scan at startup, picks the fastest clean IP, starts the proxy, and automatically fails over to the next-best IP when connections are blocked. Background rescanning keeps the IP list fresh.
+- **Added SNI domain rotation.** Maintains a pool of Cloudflare-fronted domains with health tracking. Automatically rotates to a different SNI when one is blocked. Ships with a built-in list of 18 high-traffic domains. Users can override via `--sni-list` or `SNI_DOMAINS` in config.
+- **Added failover connection tracker.** Monitors per-IP connection failures in a sliding window. When an IP hits 3 failures within 30 seconds, it's blacklisted and the proxy switches to the next available IP.
+- **Added scan caching** (`--scan-cache`). Saves results to disk for instant startup on the next run.
+- **Added live range fetching** (`--fetch-ranges`). Pulls the latest Cloudflare IPv4 ranges from cloudflare.com before scanning.
+- **Fixed logging handler accumulation.** `setup_logging()` no longer adds duplicate handlers when called multiple times.
+- **Fixed `fragment_data` off-by-one.** The last fragment now correctly includes all remaining data when `pos` advances past all specified sizes.
+- **Fixed `parse_host_port` crash on non-numeric port.** Now validates port input and exits with a clear error message.
+- Added `--scan`, `--scan-count`, `--scan-workers`, `--scan-timeout`, `--download`, `--rescan`, `--scan-cache`, `--sni-list`, `--ip-ranges`, `--fetch-ranges` CLI flags.
+- Added 42 new unit tests for the scanner, SNI provider, probe, and failover modules (71 total).
+- Bumped version to 1.2.0.
 
 ### v1.1.0
 
@@ -540,3 +840,5 @@ MIT License. See [LICENSE](LICENSE) for the full text.
 This project is a cross-platform conversion of [patterniha's original Windows-only SNI-Spoofing](https://github.com/patterniha/SNI-Spoofing) tool.
 
 The raw socket injection logic (seq_id trick) was ported from [selfishblackberry177's Go reimplementation](https://github.com/selfishblackberry177/sni-spoof).
+
+The scanner's probing methodology is inspired by [CFScanner](https://github.com/MortezaBashsiz/CFScanner) and [Cloudflare-Clean-IP-Scanner](https://github.com/bia-pain-bache/Cloudflare-Clean-IP-Scanner).
