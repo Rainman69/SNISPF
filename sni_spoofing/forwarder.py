@@ -212,21 +212,32 @@ async def handle_connection(
             # Fallback: just send the data directly
             await loop.sock_sendall(outgoing_sock, first_data)
 
-        # Connection established successfully -- record success
-        _conn_tracker.record_success(active_ip)
-        if sni_provider is not None:
-            sni_provider.mark_success(active_sni)
+        # NOTE: Do NOT mark success yet.  We need to verify the server
+        # actually responds with valid data (not a block page or RST).
+        # Success is recorded only after the first server response
+        # is received in the relay loop below.
 
         # Bidirectional relay
         done = asyncio.Event()
+        server_responded = False
 
         async def _relay(s_in, s_out, label):
+            nonlocal server_responded
             try:
                 while True:
                     data = await loop.sock_recv(s_in, BUFFER_SIZE)
                     if not data:
                         break
                     await loop.sock_sendall(s_out, data)
+                    # Record success only when we get the first
+                    # response from the server (S->C direction).
+                    # This proves the connection is actually working
+                    # and the server accepted our ClientHello.
+                    if label == "S->C" and not server_responded:
+                        server_responded = True
+                        _conn_tracker.record_success(active_ip)
+                        if sni_provider is not None:
+                            sni_provider.mark_success(active_sni)
             except (ConnectionResetError, BrokenPipeError, OSError):
                 pass
             except Exception:
@@ -242,6 +253,21 @@ async def handle_connection(
         c2s_task.cancel()
         s2c_task.cancel()
         await asyncio.gather(c2s_task, s2c_task, return_exceptions=True)
+
+        # If the server never responded, record a failure.
+        # This catches cases where DPI allows the handshake but
+        # blocks or RSTs actual application data.
+        if not server_responded:
+            fail_count = _conn_tracker.record_failure(active_ip)
+            if _conn_tracker.should_failover(active_ip) and scan_engine:
+                scan_engine.report_failure(active_ip)
+                logger.warning(
+                    "IP %s reached failure threshold (no server response) "
+                    "-- triggering failover",
+                    active_ip,
+                )
+            if sni_provider is not None:
+                sni_provider.mark_failed(active_sni)
 
     except asyncio.TimeoutError:
         logger.debug(f"[{incoming_addr[0]}:{incoming_addr[1]}] Connection timeout")

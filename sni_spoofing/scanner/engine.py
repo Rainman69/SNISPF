@@ -316,13 +316,14 @@ class ScanEngine:
         """Formatted results table for display."""
         lines = [
             f"{'#':>3}  {'IP':<18} {'TCP':>8} {'TLS':>8} "
-            f"{'Speed':>10} {'Score':>8} {'Status':<6}"
+            f"{'HTTP':>8} {'Speed':>10} {'Score':>8} {'Status':<6}"
         ]
-        lines.append("-" * 70)
+        lines.append("-" * 80)
         with self._results_lock:
             for i, r in enumerate(self._results, 1):
                 tcp_str = f"{r.tcp_ms:.0f}ms" if r.tcp_ok else "-"
                 tls_str = f"{r.tls_ms:.0f}ms" if r.tls_ok else "-"
+                http_str = f"{r.http_ms:.0f}ms" if r.http_ok else "-"
                 if r.download_ok and r.download_speed > 0:
                     speed_str = f"{r.download_speed / 1024:.1f}KB/s"
                 else:
@@ -331,6 +332,6 @@ class ScanEngine:
                 status = "OK" if r.alive else "FAIL"
                 lines.append(
                     f"{i:>3}  {r.ip:<18} {tcp_str:>8} {tls_str:>8} "
-                    f"{speed_str:>10} {score_str:>8} {status:<6}"
+                    f"{http_str:>8} {speed_str:>10} {score_str:>8} {status:<6}"
                 )
         return "\n".join(lines)

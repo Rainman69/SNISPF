@@ -205,11 +205,15 @@ class SNIProvider:
 
     def check_domain(self, domain: str, target_ip: str = "",
                      port: int = 443) -> bool:
-        """Perform a TLS handshake to verify the SNI is reachable.
+        """Perform a TLS handshake + HTTP validation to verify the SNI is reachable.
 
         If *target_ip* is given, the handshake is done against that IP
         with the domain as SNI (simulating a Cloudflare CDN connection).
         Otherwise the domain is resolved normally.
+
+        The check now includes a lightweight HTTP request to /cdn-cgi/trace
+        to verify the connection actually reaches Cloudflare and is not
+        intercepted by a censorship proxy.
         """
         host = target_ip if target_ip else domain
         try:
@@ -223,11 +227,43 @@ class SNIProvider:
             t0 = time.monotonic()
             sock.connect((host, port))
             ssl_sock = ctx.wrap_socket(sock, server_hostname=domain)
-            latency = (time.monotonic() - t0) * 1000
 
+            # Send HTTP request to verify the connection is real
+            req = (
+                f"GET /cdn-cgi/trace HTTP/1.1\r\n"
+                f"Host: {domain}\r\n"
+                f"User-Agent: Mozilla/5.0\r\n"
+                f"Connection: close\r\n\r\n"
+            ).encode()
+            ssl_sock.sendall(req)
+
+            # Read response
+            response = b""
+            try:
+                while len(response) < 4096:
+                    chunk = ssl_sock.recv(4096)
+                    if not chunk:
+                        break
+                    response += chunk
+            except (socket.timeout, TimeoutError):
+                pass
+
+            latency = (time.monotonic() - t0) * 1000
             ssl_sock.close()
-            self.mark_success(domain, latency_ms=latency)
-            return True
+
+            # Validate Cloudflare response
+            resp_text = response.decode("utf-8", errors="replace")
+            if "fl=" in resp_text and "h=" in resp_text:
+                self.mark_success(domain, latency_ms=latency)
+                return True
+            else:
+                # Response doesn't look like Cloudflare
+                logger.debug(
+                    "SNI check for %r failed: response is not Cloudflare",
+                    domain,
+                )
+                self.mark_failed(domain)
+                return False
         except Exception:
             self.mark_failed(domain)
             return False

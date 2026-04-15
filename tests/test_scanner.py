@@ -121,16 +121,26 @@ class TestCloudflareIPPool(unittest.TestCase):
 class TestProbeResult(unittest.TestCase):
     """Tests for the ProbeResult data class."""
 
-    def test_alive_when_both_pass(self):
-        r = ProbeResult(ip="1.1.1.1", tcp_ok=True, tls_ok=True)
+    def test_alive_when_all_pass(self):
+        r = ProbeResult(ip="1.1.1.1", tcp_ok=True, tls_ok=True, http_ok=True)
         self.assertTrue(r.alive)
 
     def test_not_alive_when_tcp_fails(self):
-        r = ProbeResult(ip="1.1.1.1", tcp_ok=False, tls_ok=True)
+        r = ProbeResult(ip="1.1.1.1", tcp_ok=False, tls_ok=True, http_ok=True)
         self.assertFalse(r.alive)
 
     def test_not_alive_when_tls_fails(self):
-        r = ProbeResult(ip="1.1.1.1", tcp_ok=True, tls_ok=False)
+        r = ProbeResult(ip="1.1.1.1", tcp_ok=True, tls_ok=False, http_ok=True)
+        self.assertFalse(r.alive)
+
+    def test_not_alive_when_http_fails(self):
+        """HTTP validation failure should mark the IP as not alive."""
+        r = ProbeResult(ip="1.1.1.1", tcp_ok=True, tls_ok=True, http_ok=False)
+        self.assertFalse(r.alive)
+
+    def test_not_alive_when_only_tcp_tls_pass(self):
+        """TCP + TLS without HTTP validation should NOT be enough."""
+        r = ProbeResult(ip="1.1.1.1", tcp_ok=True, tls_ok=True, http_ok=False)
         self.assertFalse(r.alive)
 
     def test_score_inf_when_dead(self):
@@ -139,18 +149,18 @@ class TestProbeResult(unittest.TestCase):
 
     def test_score_combines_latencies(self):
         r = ProbeResult(
-            ip="1.1.1.1", tcp_ok=True, tls_ok=True,
-            tcp_ms=50.0, tls_ms=100.0,
+            ip="1.1.1.1", tcp_ok=True, tls_ok=True, http_ok=True,
+            tcp_ms=50.0, tls_ms=100.0, http_ms=30.0,
         )
-        self.assertAlmostEqual(r.score, 150.0)
+        self.assertAlmostEqual(r.score, 50.0 + 100.0 + 30.0 * 0.5)
 
     def test_score_rewards_download(self):
         r1 = ProbeResult(
-            ip="1.1.1.1", tcp_ok=True, tls_ok=True,
+            ip="1.1.1.1", tcp_ok=True, tls_ok=True, http_ok=True,
             tcp_ms=50.0, tls_ms=100.0,
         )
         r2 = ProbeResult(
-            ip="2.2.2.2", tcp_ok=True, tls_ok=True,
+            ip="2.2.2.2", tcp_ok=True, tls_ok=True, http_ok=True,
             tcp_ms=50.0, tls_ms=100.0,
             download_ok=True, download_speed=100000.0,
         )
@@ -158,19 +168,34 @@ class TestProbeResult(unittest.TestCase):
 
     def test_summary_format(self):
         r = ProbeResult(
-            ip="104.16.1.1", tcp_ok=True, tls_ok=True,
-            tcp_ms=42.0, tls_ms=88.0,
+            ip="104.16.1.1", tcp_ok=True, tls_ok=True, http_ok=True,
+            tcp_ms=42.0, tls_ms=88.0, http_ms=25.0,
         )
         s = r.summary()
         self.assertIn("104.16.1.1", s)
         self.assertIn("tcp=42ms", s)
         self.assertIn("tls=88ms", s)
+        self.assertIn("http=25ms", s)
 
     def test_summary_failure(self):
         r = ProbeResult(ip="1.2.3.4", error="tcp_timeout")
         s = r.summary()
         self.assertIn("FAIL", s)
         self.assertIn("tcp_timeout", s)
+
+    def test_http_not_cloudflare_error(self):
+        """Probes that fail HTTP validation should report the right error."""
+        r = ProbeResult(ip="1.2.3.4", tcp_ok=True, tls_ok=True, http_ok=False,
+                        error="http_not_cloudflare")
+        self.assertFalse(r.alive)
+        self.assertIn("cloudflare", r.error)
+
+    def test_mitm_cert_error(self):
+        """Probes that detect MITM certificates should fail."""
+        r = ProbeResult(ip="1.2.3.4", tcp_ok=True, tls_ok=False,
+                        error="tls_mitm_cert")
+        self.assertFalse(r.alive)
+        self.assertIn("mitm", r.error)
 
 
 class TestSNIProvider(unittest.TestCase):
@@ -281,7 +306,8 @@ class TestScanEngine(unittest.TestCase):
         engine = ScanEngine(cfg)
         # Add a fake result
         from sni_spoofing.scanner.probe import ProbeResult
-        r = ProbeResult(ip="1.2.3.4", tcp_ok=True, tls_ok=True, tcp_ms=10, tls_ms=20)
+        r = ProbeResult(ip="1.2.3.4", tcp_ok=True, tls_ok=True, http_ok=True,
+                        tcp_ms=10, tls_ms=20, http_ms=15)
         engine._results = [r]
         engine.report_failure("1.2.3.4")
         self.assertEqual(engine.get_best_ip(), None)
@@ -292,6 +318,7 @@ class TestScanEngine(unittest.TestCase):
         table = engine.results_table()
         self.assertIn("IP", table)
         self.assertIn("TCP", table)
+        self.assertIn("HTTP", table)
 
     def test_cache_roundtrip(self):
         """Test saving and loading scan cache."""
@@ -304,8 +331,8 @@ class TestScanEngine(unittest.TestCase):
             from sni_spoofing.scanner.probe import ProbeResult
             engine._results = [
                 ProbeResult(
-                    ip="104.16.1.1", tcp_ok=True, tls_ok=True,
-                    tcp_ms=50, tls_ms=100,
+                    ip="104.16.1.1", tcp_ok=True, tls_ok=True, http_ok=True,
+                    tcp_ms=50, tls_ms=100, http_ms=30,
                 ),
             ]
             engine._save_cache()
@@ -322,7 +349,8 @@ class TestScanEngine(unittest.TestCase):
         engine = ScanEngine(cfg)
         from sni_spoofing.scanner.probe import ProbeResult
         engine._results = [
-            ProbeResult(ip=f"10.0.0.{i}", tcp_ok=True, tls_ok=True, tcp_ms=i*10, tls_ms=i*20)
+            ProbeResult(ip=f"10.0.0.{i}", tcp_ok=True, tls_ok=True, http_ok=True,
+                        tcp_ms=i*10, tls_ms=i*20, http_ms=i*5)
             for i in range(1, 6)
         ]
         top = engine.get_top_ips(3)

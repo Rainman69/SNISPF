@@ -494,20 +494,21 @@ def run_scan(args, config: dict, logger):
 
     # Display results
     alive = [r for r in results if r.alive]
-    print(f"\n{'═' * 70}")
+    print(f"\n{'═' * 80}")
     print(f"  Scan Results: {len(alive)}/{len(results)} IPs alive")
-    print(f"{'═' * 70}")
+    print(f"{'═' * 80}")
     print(engine.results_table())
 
     if alive:
         best = alive[0]
-        print(f"\n{'─' * 70}")
+        print(f"\n{'─' * 80}")
         print(f"  Best IP: {best.ip}")
         print(f"  TCP Latency: {best.tcp_ms:.0f}ms")
         print(f"  TLS Latency: {best.tls_ms:.0f}ms")
+        print(f"  HTTP Validation: {'OK' if best.http_ok else 'FAIL'} ({best.http_ms:.0f}ms)")
         if best.download_ok:
             print(f"  Download Speed: {best.download_speed / 1024:.1f} KB/s")
-        print(f"{'─' * 70}")
+        print(f"{'─' * 80}")
         print(f"\n  Use this IP with:")
         print(f"    snispf -l :40443 -c {best.ip}:443 -s {best.sni or 'cdnjs.cloudflare.com'}")
     else:

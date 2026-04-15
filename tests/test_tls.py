@@ -271,6 +271,56 @@ class TestRawInjector(unittest.TestCase):
         self.assertIsInstance(result, bool)
 
 
+class TestProbeValidation(unittest.TestCase):
+    """Test probe HTTP validation and MITM detection."""
+
+    def test_legitimate_issuer_detection(self):
+        """Known Cloudflare CA issuers should be accepted."""
+        from sni_spoofing.scanner.probe import IPProbe
+        probe = IPProbe()
+        self.assertTrue(probe._is_legitimate_issuer("Cloudflare Inc"))
+        self.assertTrue(probe._is_legitimate_issuer("DigiCert Inc"))
+        self.assertTrue(probe._is_legitimate_issuer("Google Trust Services LLC"))
+        self.assertTrue(probe._is_legitimate_issuer("Let's Encrypt"))
+        self.assertTrue(probe._is_legitimate_issuer("ISRG Root X1"))
+        self.assertTrue(probe._is_legitimate_issuer("E1"))
+        self.assertTrue(probe._is_legitimate_issuer("R3"))
+        self.assertTrue(probe._is_legitimate_issuer("Sectigo Limited"))
+        self.assertTrue(probe._is_legitimate_issuer("GlobalSign"))
+        self.assertTrue(probe._is_legitimate_issuer("Baltimore CyberTrust Root"))
+
+    def test_mitm_issuer_rejected(self):
+        """Unknown certificate issuers should be rejected."""
+        from sni_spoofing.scanner.probe import IPProbe
+        probe = IPProbe()
+        self.assertFalse(probe._is_legitimate_issuer("My ISP MITM CA"))
+        self.assertFalse(probe._is_legitimate_issuer("Government Root CA"))
+        self.assertFalse(probe._is_legitimate_issuer("Kaspersky Lab"))
+        self.assertFalse(probe._is_legitimate_issuer("mitmproxy"))
+        self.assertFalse(probe._is_legitimate_issuer("Charles Proxy"))
+
+    def test_empty_issuer_rejected(self):
+        """Empty issuer string should be rejected."""
+        from sni_spoofing.scanner.probe import IPProbe
+        probe = IPProbe()
+        self.assertFalse(probe._is_legitimate_issuer(""))
+
+    def test_cloudflare_trace_markers(self):
+        """Cloudflare trace markers constant should be defined."""
+        from sni_spoofing.scanner.probe import CLOUDFLARE_TRACE_MARKERS
+        self.assertIn("fl=", CLOUDFLARE_TRACE_MARKERS)
+        self.assertIn("h=", CLOUDFLARE_TRACE_MARKERS)
+        self.assertIn("colo=", CLOUDFLARE_TRACE_MARKERS)
+
+    def test_probe_result_requires_http(self):
+        """Alive requires http_ok to be True."""
+        from sni_spoofing.scanner.probe import ProbeResult
+        r = ProbeResult(ip="1.2.3.4", tcp_ok=True, tls_ok=True, http_ok=False)
+        self.assertFalse(r.alive)
+        r2 = ProbeResult(ip="1.2.3.4", tcp_ok=True, tls_ok=True, http_ok=True)
+        self.assertTrue(r2.alive)
+
+
 class TestUtilities(unittest.TestCase):
     """Test utility functions."""
 

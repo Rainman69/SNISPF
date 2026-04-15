@@ -14,7 +14,7 @@
 
 **SNISPF** is a lightweight command-line tool that helps you get past internet censorship. It works by messing with the way your connection introduces itself to firewalls, so filtered websites slip through undetected. Runs on **Windows, macOS, and Linux** -- no drivers, no admin rights needed for most features.
 
-**New in v1.3.0:** Pre-resolved seed IPs that work without DNS resolution (critical for networks with DNS poisoning like Iran). All SNI domains are now verified Cloudflare-only. Scanner tests speed and connectivity on pre-loaded IPs -- no DNS required.
+**New in v1.4.0:** Scanner now performs HTTP validation to detect blocked/intercepted connections. TLS certificate issuer checking catches MITM proxies. False positives where the scanner marked a site as "alive" but it was actually blocked are now eliminated.
 
 **Maintained by [@Rainman69](https://github.com/Rainman69)**
 ---
@@ -86,7 +86,9 @@ SNISPF sits between your app and the internet. It intercepts that "hello" messag
 │  SNISPF Scanner  │────>│  Tests 100+ Cloudflare IPs:        │
 │                  │     │  1. TCP connect  (latency)          │
 │  Runs at startup │     │  2. TLS handshake (reachability)    │
-│  + periodically  │     │  3. Download test (speed, optional) │
+│  + periodically  │     │  3. HTTP validation (Cloudflare     │
+│                  │     │     response verification)          │
+│                  │     │  4. Download test (speed, optional) │
 └────────┬────────┘     └──────────────────┬──────────────────┘
          │                                  │
          │  Picks fastest IP ──────────────>│
@@ -220,11 +222,12 @@ snispf --auto -v
 What auto mode does:
 
 1. **Scans** 100 random Cloudflare IPs (configurable with `--scan-count`)
-2. **Tests** each one for TCP latency, TLS handshake, and optionally download speed
-3. **Picks** the fastest working IP
-4. **Starts** the proxy, forwarding your traffic through that IP
-5. **Monitors** connections -- if the IP gets blocked, it automatically switches to the next best one
-6. **Rescans** periodically (if `--rescan` is set) to keep the IP list fresh
+2. **Tests** each one for TCP latency, TLS handshake, HTTP response validation, and optionally download speed
+3. **Verifies** the response is genuinely from Cloudflare (not a block page or MITM proxy)
+4. **Picks** the fastest verified working IP
+5. **Starts** the proxy, forwarding your traffic through that IP
+6. **Monitors** connections -- if the IP gets blocked, it automatically switches to the next best one
+7. **Rescans** periodically (if `--rescan` is set) to keep the IP list fresh
 
 ---
 
@@ -707,7 +710,7 @@ The DPI sees the fake SNI and allows the traffic. The server never sees the fake
 
 ### IP Scanner Pipeline
 
-The scanner uses a three-stage probing pipeline:
+The scanner uses a four-stage probing pipeline:
 
 ```
 Stage 1: TCP Connect
@@ -716,15 +719,22 @@ Stage 1: TCP Connect
 
 Stage 2: TLS Handshake
   └─ Performs a real TLS 1.2/1.3 handshake with the chosen SNI
-  └─ Verifies the IP is not SNI-filtered for that domain
+  └─ Checks certificate issuer against known Cloudflare CAs
+  └─ Detects MITM/censorship proxy certificates
   └─ Measures handshake time
 
-Stage 3: Download Test (optional)
-  └─ Issues an HTTP GET to /cdn-cgi/trace
+Stage 3: HTTP Validation (always runs)
+  └─ Sends GET /cdn-cgi/trace to verify Cloudflare response
+  └─ Checks for Cloudflare markers (fl=, h=, colo=)
+  └─ Detects block pages and intercepted connections
+  └─ Measures HTTP response time
+
+Stage 4: Download Test (optional)
+  └─ Issues another HTTP GET with validated Cloudflare response
   └─ Measures throughput
 
 Ranking:
-  score = tcp_latency + tls_latency - speed_bonus
+  score = tcp_latency + tls_latency + (http_latency * 0.5) - speed_bonus
   Lower score = better IP
 ```
 
@@ -803,6 +813,20 @@ python -m unittest discover tests/ -v
 ---
 
 ## Changelog
+
+### v1.4.0
+
+- **Fixed scanner false-positive bug: IPs/SNIs that were actually blocked were incorrectly marked as "alive".** The scanner previously only checked TCP connect + TLS handshake. A successful handshake does NOT prove the connection works -- DPI can allow the handshake but inject a block page, or a transparent MITM proxy can terminate TLS with its own certificate. The scanner now requires HTTP validation to pass before marking an IP as alive.
+- **Added HTTP validation stage to the scanner probe pipeline.** Every probe now sends `GET /cdn-cgi/trace` after the TLS handshake and verifies the response contains Cloudflare markers (`fl=`, `h=`, `colo=`). This catches block pages, MITM proxy responses, and connections that get RST after application data is sent.
+- **Added TLS certificate issuer checking for MITM detection.** The probe now extracts the server certificate issuer and checks it against known Cloudflare CA issuers (DigiCert, Google Trust Services, Let's Encrypt, etc.). Certificates from unknown issuers (censorship proxies, corporate MITM) are rejected immediately.
+- **Fixed forwarder success tracking.** Previously, `mark_success()` was called right after the bypass strategy was applied, before the server had a chance to respond. Now success is only recorded after the first server response is received in the bidirectional relay. If the server never responds (DPI blocks data after handshake), the IP is marked as failed and failover is triggered.
+- **Improved SNI provider domain health checking.** `check_domain()` now performs HTTP validation in addition to TLS handshake, ensuring that SNI domains marked as "alive" are actually usable and not intercepted.
+- **Improved download test validation.** The download speed test now verifies that the response body contains Cloudflare markers, preventing fake speed measurements from block pages or MITM responses.
+- **Changed User-Agent in scanner probes.** Scanner HTTP requests now use a standard browser User-Agent instead of `SNISPF` to avoid potential fingerprinting by DPI systems.
+- Added `http_ok`, `http_ms`, and `tls_issuer` fields to `ProbeResult`.
+- Added HTTP column to scan results table.
+- Added 9 new unit tests for MITM detection, HTTP validation, and the new alive requirement. Total: 86 tests.
+- Bumped version to 1.4.0.
 
 ### v1.3.0
 
