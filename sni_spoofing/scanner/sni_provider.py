@@ -31,8 +31,16 @@ logger = logging.getLogger("snispf")
 # blocked in restrictive networks (like Iran) come first. Cloudflare's
 # own infrastructure domains are prioritised because they are critical
 # for many services and rarely blocked completely.
+#
+# Categories are grouped by use-case: infrastructure, dev tools, education,
+# entertainment, business, fintech, security, and misc. Having a large
+# pool means that even if many domains get blocked, the rotation logic
+# will always have working alternatives.
 DEFAULT_SNI_DOMAINS = [
-    # ── Cloudflare infrastructure (highest priority, almost never blocked) ──
+    # ═══════════════════════════════════════════════════════════════════
+    # TIER 1 - Cloudflare infrastructure (highest priority, almost
+    # never blocked because blocking them would break half the internet)
+    # ═══════════════════════════════════════════════════════════════════
     "cdnjs.cloudflare.com",
     "ajax.cloudflare.com",
     "static.cloudflareinsights.com",
@@ -41,7 +49,25 @@ DEFAULT_SNI_DOMAINS = [
     "cloudflare-dns.com",
     "radar.cloudflare.com",
     "dash.cloudflare.com",
-    # ── High-traffic sites behind Cloudflare (commonly whitelisted) ──
+    "developers.cloudflare.com",
+    "api.cloudflare.com",
+    "pages.cloudflare.com",
+    "mozilla.cloudflare-dns.com",
+    "1.1.1.1",
+
+    # ═══════════════════════════════════════════════════════════════════
+    # TIER 2 - Cloudflare-hosted platform domains (workers.dev, pages.dev)
+    # These are Cloudflare's own hosting products and are almost never
+    # blocked because they host millions of legitimate sites.
+    # ═══════════════════════════════════════════════════════════════════
+    "workers.dev",
+    "pages.dev",
+
+    # ═══════════════════════════════════════════════════════════════════
+    # TIER 3 - Major high-traffic sites behind Cloudflare CDN
+    # Commonly whitelisted even in heavily censored networks because
+    # blocking them causes too much collateral damage.
+    # ═══════════════════════════════════════════════════════════════════
     "www.speedtest.net",
     "www.canva.com",
     "www.udemy.com",
@@ -52,8 +78,59 @@ DEFAULT_SNI_DOMAINS = [
     "api.openai.com",
     "auth.vercel.com",
     "unpkg.com",
-    # ── Large services on Cloudflare (good fallbacks) ──
+    "chatgpt.com",
+    "www.coinbase.com",
+
+    # ── Developer tools & package registries ──────────────────────────
+    "cdnjs.com",
+    "codepen.io",
+    "replit.com",
+    "stackblitz.com",
+    "gitbook.com",
+    "postman.com",
+    "supabase.com",
+    "www.vercel.com",
+    "astro.build",
+    "svelte.dev",
+    "vitejs.dev",
+    "bun.sh",
+    "deno.com",
+    "pnpm.io",
+    "eslint.org",
+    "prettier.io",
+    "turbo.build",
+    "hono.dev",
+    "sanity.io",
+    "directus.io",
+    "storyblok.com",
+    "builder.io",
+    "strapi.io",
+    "ghost.org",
+    "prismic.io",
+
+    # ── Web frameworks & frontend (behind Cloudflare) ─────────────────
+    "react.dev",
+    "vuejs.org",
+    "getbootstrap.com",
+    "tailwindcss.com",
+    "nextjs.org",
+
+    # ── Education & learning ──────────────────────────────────────────
+    "www.coursera.org",
+    "www.khanacademy.org",
+    "www.codecademy.com",
+    "www.freecodecamp.org",
+    "brilliant.org",
+    "exercism.org",
+
+    # ── Entertainment & media ─────────────────────────────────────────
     "www.crunchyroll.com",
+    "imgur.com",
+    "giphy.com",
+    "www.vimeo.com",
+    "kapwing.com",
+
+    # ── Business & productivity ───────────────────────────────────────
     "www.zendesk.com",
     "www.hubspot.com",
     "www.glassdoor.com",
@@ -64,6 +141,93 @@ DEFAULT_SNI_DOMAINS = [
     "www.coindesk.com",
     "www.time.is",
     "onesignal.com",
+    "clickup.com",
+    "www.monday.com",
+    "calendly.com",
+    "typeform.com",
+    "zapier.com",
+    "www.fiverr.com",
+    "www.upwork.com",
+    "coda.io",
+    "airtable.com",
+
+    # ── Security & networking tools ───────────────────────────────────
+    "www.hackerone.com",
+    "www.bugcrowd.com",
+    "www.virustotal.com",
+    "securitytrails.com",
+    "hcaptcha.com",
+    "letsencrypt.org",
+    "crt.sh",
+    "ipinfo.io",
+    "check-host.net",
+    "dnschecker.org",
+    "whoer.net",
+    "www.ssllabs.com",
+
+    # ── Hosting, DNS, & infrastructure ────────────────────────────────
+    "www.namecheap.com",
+    "porkbun.com",
+    "dnsimple.com",
+    "uptimerobot.com",
+
+    # ── Privacy & communication ───────────────────────────────────────
+    "proton.me",
+    "simplelogin.io",
+    "www.signal.org",
+
+    # ── Crypto & fintech ──────────────────────────────────────────────
+    "www.coinmarketcap.com",
+    "www.coingecko.com",
+    "www.tradingview.com",
+    "etherscan.io",
+    "metamask.io",
+    "www.alchemy.com",
+    "defillama.com",
+
+    # ── AI & ML platforms ─────────────────────────────────────────────
+    "huggingface.co",
+    "replicate.com",
+    "www.perplexity.ai",
+    "www.anthropic.com",
+    "elevenlabs.io",
+    "stability.ai",
+
+    # ── Research & academia ───────────────────────────────────────────
+    "www.researchgate.net",
+    "arxiv.org",
+    "www.semanticscholar.org",
+    "archive.org",
+
+    # ── File sharing & cloud storage ──────────────────────────────────
+    "mega.nz",
+    "pixeldrain.com",
+    "catbox.moe",
+
+    # ── Misc high-traffic Cloudflare sites ────────────────────────────
+    "www.bitwarden.com",
+    "www.greasyfork.org",
+    "alternativeto.net",
+    "www.producthunt.com",
+    "www.ycombinator.com",
+    "dev.to",
+    "hashnode.com",
+    "www.quora.com",
+    "www.stackoverflow.com",
+    "www.wix.com",
+    "www.squarespace.com",
+    "www.gumroad.com",
+    "www.gravatar.com",
+    "remove.bg",
+    "photopea.com",
+    "excalidraw.com",
+    "www.dribbble.com",
+    "www.behance.net",
+    "www.kaggle.com",
+    "overleaf.com",
+    "diagrams.net",
+    "www.investing.com",
+    "www.crunchbase.com",
 ]
 
 

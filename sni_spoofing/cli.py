@@ -236,6 +236,10 @@ def parse_args():
             "  fragment   - Fragment TLS ClientHello at SNI boundary (default)\n"
             "  fake_sni   - Inject fake ClientHello (needs root for seq_id trick)\n"
             "  combined   - Both fragmentation and fake SNI (most effective)\n"
+            "\nDomain Checker:\n"
+            "  %(prog)s --check-domains domains.txt\n"
+            "  %(prog)s --check-domains domains.txt --output verified.txt\n"
+            "  %(prog)s --check-domains domains.txt --check-http\n"
             "\nhttps://github.com/Rainman69/SNISPF"
         ),
     )
@@ -360,6 +364,38 @@ def parse_args():
         "--fetch-ranges",
         action="store_true",
         help="Fetch live Cloudflare IP ranges before scanning",
+    )
+
+    # ─── Domain checker ──────────────────────────────────────────────
+    domain_group = parser.add_argument_group("Domain Checker Options")
+    domain_group.add_argument(
+        "--check-domains",
+        metavar="FILE",
+        help="Check domains from a file to find Cloudflare-backed ones",
+    )
+    domain_group.add_argument(
+        "--check-workers",
+        type=int,
+        default=50,
+        metavar="N",
+        help="Parallel workers for domain checking (default: 50)",
+    )
+    domain_group.add_argument(
+        "--check-timeout",
+        type=float,
+        default=3.0,
+        metavar="SECONDS",
+        help="Per-domain timeout for checking (default: 3.0)",
+    )
+    domain_group.add_argument(
+        "--output",
+        metavar="FILE",
+        help="Export verified Cloudflare domains to a file",
+    )
+    domain_group.add_argument(
+        "--check-http",
+        action="store_true",
+        help="Also verify HTTP connectivity during domain check",
     )
 
     # Output settings
@@ -518,6 +554,72 @@ def run_scan(args, config: dict, logger):
     return engine
 
 
+# ─── Domain Checker Command ──────────────────────────────────────────────────
+
+def run_domain_check(args, logger):
+    """Execute a bulk domain check and print results."""
+    from sni_spoofing.scanner import DomainChecker
+
+    checker = DomainChecker(
+        concurrency=args.check_workers,
+        timeout=args.check_timeout,
+        verify_tls=True,
+        verify_http=getattr(args, "check_http", False),
+    )
+
+    # Load domains from file
+    try:
+        domains = checker.load_domains_from_file(args.check_domains)
+    except FileNotFoundError:
+        print(f"Error: File not found: {args.check_domains}")
+        return
+    except Exception as e:
+        print(f"Error reading file: {e}")
+        return
+
+    if not domains:
+        print("No domains found in file.")
+        return
+
+    print(f"\n  Checking {len(domains)} domains...\n")
+
+    # Progress display
+    def progress(done, total):
+        pct = done * 100 // total
+        bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
+        print(f"\r  Checking: [{bar}] {done}/{total} ({pct}%)", end="", flush=True)
+
+    results = checker.check_domains(domains, progress_cb=progress)
+    print()  # newline after progress bar
+
+    # Display results
+    cf_results = [r for r in results if r.is_cloudflare]
+    usable = [r for r in results if r.usable_as_sni]
+
+    print(f"\n{'═' * 90}")
+    print(f"  Domain Check Results")
+    print(f"{'═' * 90}")
+    print(f"  Total domains:    {len(results)}")
+    print(f"  Behind Cloudflare: {len(cf_results)}")
+    print(f"  Usable as SNI:    {len(usable)}")
+    print(f"{'═' * 90}\n")
+
+    # Show Cloudflare-backed domains
+    print(checker.results_table(results, cloudflare_only=True))
+
+    # Export if requested
+    if args.output:
+        count = checker.export_sni_list(results, args.output)
+        print(f"\n  Exported {count} verified domains to {args.output}")
+
+    # Also show summary for non-CF domains
+    non_cf = [r for r in results if not r.is_cloudflare and r.ip]
+    if non_cf:
+        print(f"\n  Note: {len(non_cf)} domains are NOT behind Cloudflare")
+        print(f"  (these will not work for SNI spoofing through Cloudflare IPs)")
+    print()
+
+
 # ─── Main ────────────────────────────────────────────────────────────────────
 
 def main():
@@ -575,6 +677,11 @@ def main():
     # ── Scan-only mode ────────────────────────────────────────────────
     if args.scan and not args.auto:
         run_scan(args, config, logger)
+        return
+
+    # ── Domain checker mode ───────────────────────────────────────────
+    if args.check_domains:
+        run_domain_check(args, logger)
         return
 
     # ── Validate config ───────────────────────────────────────────────

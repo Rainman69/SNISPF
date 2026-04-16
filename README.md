@@ -14,7 +14,7 @@
 
 **SNISPF** is a lightweight command-line tool that helps you get past internet censorship. It works by messing with the way your connection introduces itself to firewalls, so filtered websites slip through undetected. Runs on **Windows, macOS, and Linux** -- no drivers, no admin rights needed for most features.
 
-**New in v1.4.0:** Scanner now performs HTTP validation to detect blocked/intercepted connections. TLS certificate issuer checking catches MITM proxies. False positives where the scanner marked a site as "alive" but it was actually blocked are now eliminated.
+**New in v1.5.0:** Massively expanded scanner with 150+ verified Cloudflare-backed SNI domains and 180+ seed IPs. New `--check-domains` command for bulk domain verification -- feed it a text file and it identifies which domains are behind Cloudflare and usable for SNI spoofing. Inspired by community scanners (GoodbyeDPI, ByeDPI, Zapret, SNI-Spoofing).
 
 **Maintained by [@Rainman69](https://github.com/Rainman69)**
 ---
@@ -315,6 +315,77 @@ On the next run, SNISPF loads the cached results first and starts immediately, t
 
 ---
 
+## Domain Checker
+
+The built-in domain checker lets you scan a list of domains to find which ones are behind Cloudflare's CDN and can be used as fake SNI targets. This is useful for building your own custom SNI list or verifying third-party domain lists.
+
+### Checking domains from a file
+
+Create a text file with one domain per line:
+
+```text
+# domains.txt
+example.com
+cloudflare.com
+discord.com
+google.com
+```
+
+Then run:
+
+```bash
+snispf --check-domains domains.txt
+```
+
+Output:
+
+```
+  Checking 4 domains...
+
+  Checking: [████████████████████] 4/4 (100%)
+
+══════════════════════════════════════════════════════════════════════════════════════════
+  Domain Check Results
+══════════════════════════════════════════════════════════════════════════════════════════
+  Total domains:    4
+  Behind Cloudflare: 3
+  Usable as SNI:    3
+══════════════════════════════════════════════════════════════════════════════════════════
+
+   #  Domain                                   IP               CDN  TCP  TLS   TLS ms Status
+------------------------------------------------------------------------------------------
+   1  cloudflare.com                           104.16.133.229    CF   OK   OK     25ms SNI
+   2  discord.com                              162.159.135.232   CF   OK   OK     31ms SNI
+   3  example.com                              104.18.32.7       CF   OK   OK     33ms SNI
+
+  Note: 1 domains are NOT behind Cloudflare
+  (these will not work for SNI spoofing through Cloudflare IPs)
+```
+
+### Exporting verified domains
+
+Export the verified Cloudflare-backed domains to a file for use with `--sni-list`:
+
+```bash
+snispf --check-domains domains.txt --output verified.txt
+```
+
+### Deeper validation with HTTP check
+
+Add `--check-http` to also verify HTTP connectivity:
+
+```bash
+snispf --check-domains domains.txt --check-http
+```
+
+### Custom concurrency and timeout
+
+```bash
+snispf --check-domains domains.txt --check-workers 100 --check-timeout 5
+```
+
+---
+
 ## SNI Domain Rotation
 
 SNISPF maintains a pool of SNI domains (Cloudflare-fronted sites) and rotates between them automatically. If a particular SNI gets blocked, the tool switches to another one.
@@ -332,10 +403,16 @@ Built-in SNI domains include:
 - `www.discord.com`
 - `registry.npmjs.org`
 - `api.openai.com`
+- `chatgpt.com`
 - `auth.vercel.com`
-- and more...
+- `www.coursera.org`
+- `huggingface.co`
+- `proton.me`
+- `metamask.io`
+- `etherscan.io`
+- and 130+ more verified Cloudflare-fronted domains...
 
-> **Important:** All default SNI domains are verified to be behind Cloudflare's CDN. Non-Cloudflare domains (like `dl.google.com`, `cdn.shopify.com`, `fonts.googleapis.com`) will NOT work with Cloudflare IPs and have been removed in v1.3.0.
+> **Important:** All default SNI domains are verified to be behind Cloudflare's CDN. Non-Cloudflare domains (like `dl.google.com`, `cdn.shopify.com`, `fonts.googleapis.com`) will NOT work with Cloudflare IPs and have been removed in v1.3.0. In v1.5.0, the list was expanded to 150+ verified domains across multiple categories (infrastructure, developer tools, education, entertainment, business, fintech, security, AI/ML platforms, and more).
 
 You can override or extend the list:
 
@@ -452,6 +529,8 @@ usage: snispf [-h] [--config CONFIG] [--generate-config PATH]
               [--scan-timeout SECONDS] [--download] [--rescan SECONDS]
               [--scan-cache PATH] [--sni-list DOMAINS] [--ip-ranges CIDRS]
               [--fetch-ranges]
+              [--check-domains FILE] [--check-workers N]
+              [--check-timeout SECONDS] [--output FILE] [--check-http]
               [--verbose] [--quiet] [--version] [--info]
 ```
 
@@ -478,6 +557,11 @@ usage: snispf [-h] [--config CONFIG] [--generate-config PATH]
 | `--sni-list` | | Comma-separated SNI domains for rotation |
 | `--ip-ranges` | | Comma-separated custom CIDR ranges |
 | `--fetch-ranges` | | Fetch live Cloudflare IP ranges before scanning |
+| `--check-domains` | | Check domains from a file for Cloudflare CDN backing |
+| `--check-workers` | | Parallel workers for domain checking (default: 50) |
+| `--check-timeout` | | Per-domain timeout in seconds (default: 3.0) |
+| `--output` | | Export verified domains to a file |
+| `--check-http` | | Also verify HTTP connectivity during domain check |
 | `--verbose` | `-v` | Show detailed debug output |
 | `--quiet` | `-q` | Only show warnings and errors |
 | `--version` | `-V` | Print version and exit |
@@ -777,7 +861,8 @@ SNISPF/
 │   │   ├── ip_ranges.py        # Cloudflare CIDR pool and random IP sampling
 │   │   ├── probe.py            # TCP/TLS/download probe for single IPs
 │   │   ├── engine.py           # Concurrent scan orchestrator with caching
-│   │   └── sni_provider.py     # SNI domain list management and rotation
+│   │   ├── sni_provider.py     # SNI domain list management and rotation
+│   │   └── domain_checker.py   # Bulk domain checker for Cloudflare CDN detection
 │   ├── tls/                    # TLS packet handling
 │   │   ├── __init__.py         # ClientHello builder and parser
 │   │   └── fragment.py         # TLS record fragmentation logic
@@ -813,6 +898,16 @@ python -m unittest discover tests/ -v
 ---
 
 ## Changelog
+
+### v1.5.0
+
+- **Massively expanded default SNI domain list to 150+ verified Cloudflare-backed domains.** Previously 30 domains; now covers infrastructure, developer tools, education, entertainment, business, fintech, security, AI/ML platforms, research, file sharing, and more. Every domain has been verified to resolve to Cloudflare IP ranges. Categories are prioritised so that Cloudflare infrastructure domains (almost never blocked) come first. This gives the rotation logic a much larger pool to fall back on when domains get blocked.
+- **Expanded seed IP list from 100 to 180+ pre-resolved Cloudflare edge IPs.** Added IPs across 104.24.0.0/14, 197.234.240.0/22, and additional subnets in all existing ranges. New IPs include endpoints for chatgpt.com, proton.me, huggingface.co, metamask.io, etherscan.io, clickup.com, calendly.com, hcaptcha.com, and many more. The scanner now has more guaranteed starting points for DNS-poisoned networks.
+- **Added bulk domain checker (`--check-domains`).** New feature inspired by community SNI scanner tools. Feed it a text file with domain names (one per line) and it checks each one: DNS resolution, Cloudflare IP range matching, TCP connectivity, and TLS handshake. Outputs a sorted table showing which domains are behind Cloudflare and usable as fake SNI targets. Supports `--output` to export the verified list, `--check-http` for deeper validation, configurable concurrency with `--check-workers`, and timeout with `--check-timeout`.
+- **Added `domain_checker.py` module** with `DomainChecker`, `DomainResult`, and `is_cloudflare_ip()` for programmatic use. The checker runs DNS + IP range + TLS checks in parallel using a thread pool. Results include CDN identification, latency measurements, and a `usable_as_sni` property that combines all checks.
+- **Added support for comments and URL prefixes in domain list files.** The domain checker handles `#` comments, blank lines, `http://`/`https://` prefixes, path stripping, and port stripping when loading domain files.
+- Added 17 new unit tests for the domain checker, expanded seed IPs, expanded SNI list, and duplicate detection. Total: 104 tests.
+- Bumped version to 1.5.0.
 
 ### v1.4.0
 
@@ -885,3 +980,5 @@ This project is a cross-platform conversion of [patterniha's original Windows-on
 The raw socket injection logic (seq_id trick) was ported from [selfishblackberry177's Go reimplementation](https://github.com/selfishblackberry177/sni-spoof).
 
 The scanner's probing methodology is inspired by [CFScanner](https://github.com/MortezaBashsiz/CFScanner) and [Cloudflare-Clean-IP-Scanner](https://github.com/bia-pain-bache/Cloudflare-Clean-IP-Scanner).
+
+The DPI bypass techniques draw inspiration from the broader anti-censorship community, including [GoodbyeDPI](https://github.com/ValdikSS/GoodbyeDPI), [ByeDPI](https://github.com/hufrea/byedpi), [Zapret](https://github.com/bol-van/zapret), and [phantom-dpi](https://github.com/nickolaev/phantom-dpi).

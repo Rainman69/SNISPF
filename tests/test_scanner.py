@@ -435,6 +435,183 @@ class TestModuleImports(unittest.TestCase):
         self.assertIsInstance(CLOUDFLARE_SEED_IPS, list)
         self.assertGreater(len(CLOUDFLARE_SEED_IPS), 50)
 
+    def test_seed_ips_expanded(self):
+        """Expanded seed list should have 150+ IPs."""
+        from sni_spoofing.scanner import CLOUDFLARE_SEED_IPS
+        self.assertGreater(len(CLOUDFLARE_SEED_IPS), 150)
+
+    def test_sni_domains_expanded(self):
+        """Expanded SNI domain list should have 100+ domains."""
+        from sni_spoofing.scanner.sni_provider import DEFAULT_SNI_DOMAINS
+        self.assertGreater(len(DEFAULT_SNI_DOMAINS), 100)
+
+    def test_sni_domains_no_duplicates(self):
+        """Default SNI list must not contain duplicates."""
+        from sni_spoofing.scanner.sni_provider import DEFAULT_SNI_DOMAINS
+        self.assertEqual(len(DEFAULT_SNI_DOMAINS), len(set(DEFAULT_SNI_DOMAINS)))
+
+    def test_seed_ips_no_duplicates(self):
+        """Seed IP list must not contain duplicates."""
+        from sni_spoofing.scanner.ip_ranges import CLOUDFLARE_SEED_IPS
+        self.assertEqual(len(CLOUDFLARE_SEED_IPS), len(set(CLOUDFLARE_SEED_IPS)))
+
+
+class TestDomainChecker(unittest.TestCase):
+    """Tests for the bulk domain checker."""
+
+    def test_import(self):
+        from sni_spoofing.scanner import DomainChecker, DomainResult, is_cloudflare_ip
+
+    def test_is_cloudflare_ip_true(self):
+        from sni_spoofing.scanner.domain_checker import is_cloudflare_ip
+        self.assertTrue(is_cloudflare_ip("104.16.1.1"))
+        self.assertTrue(is_cloudflare_ip("172.64.0.1"))
+        self.assertTrue(is_cloudflare_ip("188.114.96.1"))
+        self.assertTrue(is_cloudflare_ip("141.101.64.1"))
+
+    def test_is_cloudflare_ip_false(self):
+        from sni_spoofing.scanner.domain_checker import is_cloudflare_ip
+        self.assertFalse(is_cloudflare_ip("8.8.8.8"))
+        self.assertFalse(is_cloudflare_ip("1.2.3.4"))
+        self.assertFalse(is_cloudflare_ip("192.168.1.1"))
+        self.assertFalse(is_cloudflare_ip("not-an-ip"))
+
+    def test_is_cloudflare_ip_invalid(self):
+        from sni_spoofing.scanner.domain_checker import is_cloudflare_ip
+        self.assertFalse(is_cloudflare_ip(""))
+        self.assertFalse(is_cloudflare_ip("abc.def.ghi.jkl"))
+
+    def test_domain_result_usable(self):
+        from sni_spoofing.scanner.domain_checker import DomainResult
+        r = DomainResult(
+            domain="test.com", ip="104.16.1.1",
+            is_cloudflare=True, tcp_ok=True, tls_ok=True,
+        )
+        self.assertTrue(r.usable_as_sni)
+
+    def test_domain_result_not_usable_no_cf(self):
+        from sni_spoofing.scanner.domain_checker import DomainResult
+        r = DomainResult(
+            domain="test.com", ip="8.8.8.8",
+            is_cloudflare=False, tcp_ok=True, tls_ok=True,
+        )
+        self.assertFalse(r.usable_as_sni)
+
+    def test_domain_result_not_usable_no_tls(self):
+        from sni_spoofing.scanner.domain_checker import DomainResult
+        r = DomainResult(
+            domain="test.com", ip="104.16.1.1",
+            is_cloudflare=True, tcp_ok=True, tls_ok=False,
+        )
+        self.assertFalse(r.usable_as_sni)
+
+    def test_domain_result_summary(self):
+        from sni_spoofing.scanner.domain_checker import DomainResult
+        r = DomainResult(
+            domain="example.com", ip="104.16.1.1",
+            is_cloudflare=True, tcp_ok=True, tls_ok=True,
+        )
+        s = r.summary()
+        self.assertIn("example.com", s)
+        self.assertIn("CF", s)
+        self.assertIn("TCP:OK", s)
+        self.assertIn("TLS:OK", s)
+
+    def test_checker_construction(self):
+        from sni_spoofing.scanner.domain_checker import DomainChecker
+        checker = DomainChecker(concurrency=10, timeout=2.0)
+        self.assertEqual(checker.concurrency, 10)
+        self.assertEqual(checker.timeout, 2.0)
+
+    def test_load_domains_from_file(self):
+        from sni_spoofing.scanner.domain_checker import DomainChecker
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+            f.write("# Comment line\n")
+            f.write("example.com\n")
+            f.write("https://test.org/path\n")
+            f.write("  spaces.com  \n")
+            f.write("\n")
+            f.write("http://plain.net\n")
+            path = f.name
+
+        try:
+            domains = DomainChecker.load_domains_from_file(path)
+            self.assertEqual(len(domains), 4)
+            self.assertIn("example.com", domains)
+            self.assertIn("test.org", domains)
+            self.assertIn("spaces.com", domains)
+            self.assertIn("plain.net", domains)
+        finally:
+            os.unlink(path)
+
+    def test_results_table_format(self):
+        from sni_spoofing.scanner.domain_checker import DomainChecker, DomainResult
+        results = [
+            DomainResult(
+                domain="test.com", ip="104.16.1.1",
+                is_cloudflare=True, tcp_ok=True, tls_ok=True,
+                tls_ms=42.0,
+            ),
+            DomainResult(
+                domain="other.com", ip="8.8.8.8",
+                is_cloudflare=False, tcp_ok=True, tls_ok=True,
+            ),
+        ]
+        table = DomainChecker.results_table(results)
+        self.assertIn("test.com", table)
+        self.assertIn("other.com", table)
+        self.assertIn("CF", table)
+
+    def test_results_table_cloudflare_only(self):
+        from sni_spoofing.scanner.domain_checker import DomainChecker, DomainResult
+        results = [
+            DomainResult(domain="cf.com", ip="104.16.1.1", is_cloudflare=True),
+            DomainResult(domain="non.com", ip="8.8.8.8", is_cloudflare=False),
+        ]
+        table = DomainChecker.results_table(results, cloudflare_only=True)
+        self.assertIn("cf.com", table)
+        self.assertNotIn("non.com", table)
+
+    def test_export_sni_list(self):
+        from sni_spoofing.scanner.domain_checker import DomainChecker, DomainResult
+        import tempfile
+
+        results = [
+            DomainResult(
+                domain="good.com", ip="104.16.1.1",
+                is_cloudflare=True, tcp_ok=True, tls_ok=True,
+            ),
+            DomainResult(
+                domain="bad.com", ip="8.8.8.8",
+                is_cloudflare=False, tcp_ok=True, tls_ok=True,
+            ),
+        ]
+
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
+            path = f.name
+
+        try:
+            count = DomainChecker.export_sni_list(results, path)
+            self.assertEqual(count, 1)  # Only the CF domain
+
+            with open(path) as f:
+                content = f.read()
+            self.assertIn("good.com", content)
+            self.assertNotIn("bad.com", content)
+        finally:
+            os.unlink(path)
+
+    def test_check_unreachable_domain(self):
+        """Checking a non-existent domain should fail gracefully."""
+        from sni_spoofing.scanner.domain_checker import DomainChecker
+        checker = DomainChecker(concurrency=2, timeout=1.0)
+        results = checker.check_domains(["this-domain-does-not-exist-xyz123.com"])
+        self.assertEqual(len(results), 1)
+        self.assertFalse(results[0].is_cloudflare)
+        self.assertEqual(results[0].error, "dns_fail")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
