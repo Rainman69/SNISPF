@@ -19,6 +19,7 @@ if the current selection becomes unreachable.
 
 import asyncio
 import logging
+import resource
 import socket
 import sys
 import time
@@ -39,6 +40,37 @@ FAILOVER_THRESHOLD = 3
 # Rapid failure window -- if we get FAILOVER_THRESHOLD failures within
 # this many seconds, the IP is considered blocked.
 FAILOVER_WINDOW = 30.0
+
+# Maximum concurrent connections.  Keeps the process well under the
+# OS file-descriptor limit and avoids "Too many open files" crashes
+# that macOS users hit with the default 256 fd limit.
+MAX_CONCURRENT_CONNECTIONS = 512
+
+
+def _raise_fd_limit():
+    """Try to raise the OS file-descriptor soft limit.
+
+    macOS defaults to 256, which is far too low for a proxy that handles
+    many parallel connections (each needs 2 fds: incoming + outgoing).
+    We attempt to raise the soft limit to the hard limit, or at least
+    to a reasonable value.
+    """
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        if soft < 4096:
+            target = min(hard, 65536) if hard > soft else 4096
+            try:
+                resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+                logger.debug("Raised fd limit from %d to %d", soft, target)
+            except (ValueError, OSError):
+                # On some systems we cannot raise beyond hard limit
+                try:
+                    resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
+                except (ValueError, OSError):
+                    pass
+    except (AttributeError, OSError):
+        # resource module not available (unlikely) or unsupported platform
+        pass
 
 
 class ConnectionTracker:
@@ -312,6 +344,9 @@ async def start_server(
     When *sni_provider* is provided, the fake SNI is dynamically
     selected from the provider's healthy domain list.
     """
+    # Raise the OS file-descriptor limit before binding
+    _raise_fd_limit()
+
     # Create listening socket
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_sock.setblocking(False)
@@ -330,6 +365,13 @@ async def start_server(
     server_sock.listen(128)
 
     loop = asyncio.get_running_loop()
+
+    # Semaphore limits concurrent connections to prevent fd exhaustion.
+    # Each proxied connection uses 2 fds (client + server), plus the
+    # listening socket itself.  This cap prevents the "Too many open
+    # files" crash that happens on macOS (default fd limit 256) and
+    # Android/Termux when VPN clients open many connections at once.
+    conn_semaphore = asyncio.Semaphore(MAX_CONCURRENT_CONNECTIONS)
 
     logger.info(f"Listening on {listen_host}:{listen_port}")
     if scan_engine is not None:
@@ -357,25 +399,28 @@ async def start_server(
     logger.info(f"  Address: 127.0.0.1:{listen_port}")
     logger.info("=" * 60)
 
+    async def _guarded_handle(sock, addr):
+        """Wrap handle_connection with the concurrency semaphore."""
+        async with conn_semaphore:
+            await handle_connection(
+                incoming_sock=sock,
+                incoming_addr=addr,
+                connect_ip=connect_ip,
+                connect_port=connect_port,
+                fake_sni=fake_sni,
+                bypass_strategy=bypass_strategy,
+                interface_ip=interface_ip,
+                raw_injector=raw_injector,
+                scan_engine=scan_engine,
+                sni_provider=sni_provider,
+            )
+
     try:
         while True:
             incoming_sock, addr = await loop.sock_accept(server_sock)
             incoming_sock.setblocking(False)
 
-            loop.create_task(
-                handle_connection(
-                    incoming_sock=incoming_sock,
-                    incoming_addr=addr,
-                    connect_ip=connect_ip,
-                    connect_port=connect_port,
-                    fake_sni=fake_sni,
-                    bypass_strategy=bypass_strategy,
-                    interface_ip=interface_ip,
-                    raw_injector=raw_injector,
-                    scan_engine=scan_engine,
-                    sni_provider=sni_provider,
-                )
-            )
+            loop.create_task(_guarded_handle(incoming_sock, addr))
     except asyncio.CancelledError:
         pass
     finally:

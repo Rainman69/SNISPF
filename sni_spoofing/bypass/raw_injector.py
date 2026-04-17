@@ -181,7 +181,14 @@ class RawInjector:
             return False
 
         self.iface_name, self.iface_idx = iface_info
-        self.raw_fd.bind((self.iface_name, ETH_P_ALL))
+        try:
+            self.raw_fd.bind((self.iface_name, ETH_P_ALL))
+        except OSError as e:
+            logger.warning(f"Cannot bind raw socket to {self.iface_name}: {e}")
+            logger.warning("Raw injection unavailable on this platform")
+            self.raw_fd.close()
+            self.raw_fd = None
+            return False
 
         self.running = True
         self._sniffer_thread = threading.Thread(

@@ -121,12 +121,16 @@ class FakeSNIBypass(BypassStrategy):
         first_data: bytes,
         loop,
     ) -> bool:
-        """Send fake ClientHello with low TTL, then real data fragmented.
+        """Send fake ClientHello via a separate socket, then real data fragmented.
 
-        The fake packet has a TTL low enough to expire before reaching
-        the server, but the DPI middlebox (typically 1-3 hops away)
-        will see it. After the fake, the real ClientHello is sent in
-        fragments to further confuse DPI reassembly.
+        The fake ClientHello is sent through a **separate** raw TCP socket
+        (not the proxied connection) with a very low IP TTL.  This ensures
+        the fake reaches DPI middleboxes (typically 1-3 hops away) but
+        expires before the real server, so the server never sees it and
+        the real TLS handshake on the main socket stays clean.
+
+        If the separate-socket approach fails (e.g. no permission),
+        we fall back to pure fragmentation which still works well.
 
         This is the default fallback on macOS, Android/Termux, and
         unprivileged Linux where AF_PACKET raw sockets are not available.
@@ -134,33 +138,46 @@ class FakeSNIBypass(BypassStrategy):
         try:
             server_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
+            # --- Send fake on a SEPARATE socket with low TTL ---
+            # This prevents corrupting the real TLS stream.
+            remote_addr = server_sock.getpeername()
             fake_hello = ClientHelloBuilder.build_client_hello(sni=fake_sni)
 
-            # Save original TTL
-            original_ttl = server_sock.getsockopt(
-                socket.IPPROTO_IP, socket.IP_TTL
-            )
-
-            # Try multiple low TTL values for better DPI coverage.
-            # Different networks place DPI at different hop distances.
-            for ttl in (3, 5, 8):
+            try:
+                probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                probe.setblocking(False)
+                probe.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                # Use a very low TTL so the packet dies before the server
+                for ttl in (1, 2, 3):
+                    try:
+                        probe.setsockopt(
+                            socket.IPPROTO_IP, socket.IP_TTL, ttl
+                        )
+                        # Non-blocking connect -- we don't care if it
+                        # completes; we just want the SYN + fake data
+                        # to traverse the DPI middlebox path.
+                        try:
+                            await asyncio.wait_for(
+                                loop.sock_connect(probe, remote_addr),
+                                timeout=0.3,
+                            )
+                            await loop.sock_sendall(probe, fake_hello)
+                        except (asyncio.TimeoutError, OSError):
+                            pass
+                        break
+                    except OSError:
+                        continue
                 try:
-                    server_sock.setsockopt(
-                        socket.IPPROTO_IP, socket.IP_TTL, ttl
-                    )
-                    await loop.sock_sendall(server_sock, fake_hello)
-                    break
+                    probe.close()
                 except OSError:
-                    continue
+                    pass
+            except OSError:
+                # Separate socket approach failed, that's fine
+                pass
 
             await asyncio.sleep(0.05)
 
-            # Restore normal TTL
-            server_sock.setsockopt(
-                socket.IPPROTO_IP, socket.IP_TTL, original_ttl
-            )
-
-            # Now send the real ClientHello fragmented at the SNI boundary
+            # --- Send the real ClientHello fragmented on the main socket ---
             fragments = fragment_client_hello(first_data, "sni_split")
 
             for i, fragment in enumerate(fragments):

@@ -90,34 +90,39 @@ class CombinedBypass(BypassStrategy):
                     )
 
             elif self.fake_first and self.use_ttl_trick:
-                # TTL trick: send fake with low TTL so it reaches DPI
-                # but expires before the server.  This is the default
-                # fallback on macOS, Android/Termux, and unprivileged
-                # Linux where AF_PACKET raw sockets are not available.
+                # TTL trick: send fake via a SEPARATE socket with low TTL
+                # so it reaches DPI but expires before the server.  The
+                # main socket stays clean for the real TLS handshake.
                 fake_hello = ClientHelloBuilder.build_client_hello(sni=fake_sni)
                 try:
-                    original_ttl = server_sock.getsockopt(
-                        socket.IPPROTO_IP, socket.IP_TTL
-                    )
-                    # Try multiple TTL values for wider DPI coverage
-                    for ttl in (3, 5, 8):
+                    remote_addr = server_sock.getpeername()
+                    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    probe.setblocking(False)
+                    probe.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                    for ttl in (1, 2, 3):
                         try:
-                            server_sock.setsockopt(
+                            probe.setsockopt(
                                 socket.IPPROTO_IP, socket.IP_TTL, ttl
                             )
-                            await loop.sock_sendall(server_sock, fake_hello)
+                            try:
+                                await asyncio.wait_for(
+                                    loop.sock_connect(probe, remote_addr),
+                                    timeout=0.3,
+                                )
+                                await loop.sock_sendall(probe, fake_hello)
+                            except (asyncio.TimeoutError, OSError):
+                                pass
                             break
                         except OSError:
                             continue
-                    await asyncio.sleep(0.05)
-                    server_sock.setsockopt(
-                        socket.IPPROTO_IP, socket.IP_TTL, original_ttl
-                    )
+                    try:
+                        probe.close()
+                    except OSError:
+                        pass
                 except OSError:
-                    # TTL trick not available on this socket, skip
                     pass
 
-                await asyncio.sleep(0.001)
+                await asyncio.sleep(0.05)
 
             # NOTE: Without raw sockets or TTL trick, we do NOT send a fake
             # ClientHello on the real TCP stream. It would corrupt the

@@ -57,7 +57,7 @@ BANNER = r"""
 
      ┌──────────────────────────────────────────────────────────────────┐
      │  SNISPF - Cross-Platform DPI Bypass Tool                        │
-     │  SNI Spoofing + TLS Fragmentation + Auto Scanner  v1.6.0        │
+     │  SNI Spoofing + TLS Fragmentation + Auto Scanner  v1.7.0        │
      │  Works on Windows / macOS / Linux                               │
      │  https://github.com/Rainman69/SNISPF                            │
      └──────────────────────────────────────────────────────────────────┘
@@ -693,29 +693,27 @@ def main():
             if os.path.isfile(candidate):
                 logger.info("Auto-loading config from %s", candidate)
                 user_config = load_config(candidate)
-                # File values are base, CLI flags override
-                for key, val in user_config.items():
-                    if key not in config or config[key] == DEFAULT_CONFIG.get(key):
-                        config[key] = val
-                # Re-apply CLI overrides on top of loaded config
+                # Only apply file values for keys that were NOT
+                # explicitly overridden by CLI arguments.
+                cli_overridden = set()
                 if args.listen:
-                    host, port = parse_host_port(args.listen, "0.0.0.0", 40443)
-                    config["LISTEN_HOST"] = host
-                    config["LISTEN_PORT"] = port
+                    cli_overridden.update(["LISTEN_HOST", "LISTEN_PORT"])
                 if args.connect:
-                    host, port = parse_host_port(args.connect, "104.18.38.202", 443)
-                    config["CONNECT_IP"] = host
-                    config["CONNECT_PORT"] = port
+                    cli_overridden.update(["CONNECT_IP", "CONNECT_PORT"])
                 if args.sni:
-                    config["FAKE_SNI"] = args.sni
+                    cli_overridden.add("FAKE_SNI")
                 if args.method:
-                    config["BYPASS_METHOD"] = args.method
+                    cli_overridden.add("BYPASS_METHOD")
                 if args.fragment_strategy:
-                    config["FRAGMENT_STRATEGY"] = args.fragment_strategy
+                    cli_overridden.add("FRAGMENT_STRATEGY")
                 if args.fragment_delay is not None:
-                    config["FRAGMENT_DELAY"] = args.fragment_delay
+                    cli_overridden.add("FRAGMENT_DELAY")
                 if args.ttl_trick:
-                    config["USE_TTL_TRICK"] = True
+                    cli_overridden.add("USE_TTL_TRICK")
+
+                for key, val in user_config.items():
+                    if key not in cli_overridden:
+                        config[key] = val
                 break
 
     # ── Validate config ───────────────────────────────────────────────
