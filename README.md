@@ -14,7 +14,7 @@
 
 **SNISPF** is a lightweight command-line tool that helps you get past internet censorship. It works by messing with the way your connection introduces itself to firewalls, so filtered websites slip through undetected. Runs on **Windows, macOS, and Linux** -- no drivers, no admin rights needed for most features.
 
-**New in v1.5.0:** Massively expanded scanner with 150+ verified Cloudflare-backed SNI domains and 180+ seed IPs. New `--check-domains` command for bulk domain verification -- feed it a text file and it identifies which domains are behind Cloudflare and usable for SNI spoofing. Inspired by community scanners (GoodbyeDPI, ByeDPI, Zapret, SNI-Spoofing).
+**New in v1.6.0:** Fixed `fake_sni` and `combined` methods on macOS and Android/Termux -- they now auto-enable the TTL trick when raw sockets are unavailable, so these bypass methods actually work without root on all platforms. Fixed `--sni` flag being ignored when auto mode is active. Fixed `config.json` not being auto-loaded from the current directory. Inspired by community scanners (GoodbyeDPI, ByeDPI, Zapret, SNI-Spoofing).
 
 **Maintained by [@Rainman69](https://github.com/Rainman69)**
 ---
@@ -592,13 +592,14 @@ Injects a decoy hello message with an allowed website name that DPI parses, but 
 
 **With root (Linux):** Uses raw socket injection to send the fake ClientHello with a TCP sequence number that falls outside the server's receive window. DPI sees it and whitelists the connection. The server drops it because the sequence number is out of range. This is the same technique used by the [original patterniha tool](https://github.com/patterniha/SNI-Spoofing).
 
-**Without root:** Falls back to fragmenting the real ClientHello (same as `fragment` method). Sending a fake ClientHello on the same TCP stream would corrupt the TLS handshake, so we don't do that.
+**Without root (macOS, Android, Windows, unprivileged Linux):** Uses the **TTL trick** -- sends a fake ClientHello with a low IP TTL (3-8 hops) that reaches the DPI middlebox but expires before the real server. Then sends the real ClientHello in fragments. This is auto-enabled in v1.6.0.
 
 ```
-With root:    [Fake hello: seq=out-of-window]    --> DPI sees it, server drops it
-              [Real hello: seq=normal]            --> Server processes, DPI ignores
+With root:        [Fake hello: seq=out-of-window]    --> DPI sees it, server drops it
+                  [Real hello: seq=normal]            --> Server processes, DPI ignores
 
-Without root: Falls back to fragment method
+Without root:     [Fake hello: TTL=3-8]              --> DPI sees it, packet expires
+                  [Real hello: fragments]             --> DPI sees incomplete SNI
 ```
 
 ### `combined` (strongest)
@@ -609,7 +610,7 @@ Uses both methods at the same time: injects a fake hello (if root is available),
 
 **With root:** Injects the fake via raw socket (out-of-window seq trick) and fragments the real ClientHello. Hits DPI from two angles simultaneously.
 
-**Without root:** Fragments only (the fake injection is skipped since it can't be done safely without raw sockets).
+**Without root:** Uses the TTL trick to send a fake ClientHello that expires before the server, then fragments the real ClientHello. Auto-enabled in v1.6.0.
 
 ```bash
 snispf -l :40443 -c 104.18.38.202:443 -s www.speedtest.net -m combined
@@ -645,11 +646,11 @@ snispf -l :40443 -c 104.18.38.202:443 -s cdnjs.cloudflare.com --fragment-strateg
 |---|---|---|
 | Windows 10 / 11 | Yes | No admin needed for basic methods |
 | Linux (Ubuntu, Debian, Fedora, Arch, etc.) | Yes | Use `sudo` for raw injection (seq_id trick) |
-| macOS | Yes | Fragmentation and TTL trick only (no `AF_PACKET`) |
-| Android (Termux) | Yes | Install Python first: `pkg install python` |
+| macOS | Yes | TTL trick + fragmentation (auto-enabled for fake_sni/combined) |
+| Android (Termux) | Yes | Install Python first: `pkg install python`. TTL trick works. |
 | WSL / WSL2 | Yes | Works like native Linux |
 
-The `fragment` method works everywhere using standard socket options (`TCP_NODELAY`). The `fake_sni` and `combined` methods are most effective on Linux with root, where they use `AF_PACKET` raw sockets to inject fake packets with out-of-window TCP sequence numbers. Without root, they fall back to fragmentation.
+The `fragment` method works everywhere using standard socket options (`TCP_NODELAY`). The `fake_sni` and `combined` methods are most effective on Linux with root, where they use `AF_PACKET` raw sockets to inject fake packets with out-of-window TCP sequence numbers. **On macOS, Android, and unprivileged Linux**, they automatically fall back to the **TTL trick** (sending a fake ClientHello with low IP TTL) combined with fragmentation -- this is more effective than fragmentation alone.
 
 The **scanner** works on all platforms with no special privileges.
 
@@ -898,6 +899,15 @@ python -m unittest discover tests/ -v
 ---
 
 ## Changelog
+
+### v1.6.0
+
+- **Fixed `fake_sni` and `combined` methods on macOS and Android/Termux.** Previously, when `AF_PACKET` raw sockets were unavailable (anything that isn't Linux + root), both `fake_sni` and `combined` silently fell back to pure fragmentation -- identical to the `fragment` method. Now they automatically enable the **TTL trick**: a fake ClientHello is sent with a low IP TTL (tries 3, 5, 8 hops) so it reaches the DPI middlebox but expires before the real server, followed by the real ClientHello sent in fragments. This makes `combined` and `fake_sni` genuinely useful on macOS, Android/Termux, Windows, and unprivileged Linux.
+- **Fixed `--sni` / `-s` flag being ignored when auto mode is active.** When the scanner's SNI provider was active, it would override the user's explicit `--sni` choice with a random domain from the built-in pool. The user-specified SNI is now injected into the provider with top priority so it is always used first.
+- **Fixed `config.json` not being auto-loaded.** Previously, `config.json` in the current directory was ignored unless you explicitly passed `--config config.json`. Now, if no `--config` flag is given, SNISPF automatically loads `config.json` or `snispf.json` from the current directory (if present). CLI flags still override file values.
+- **Improved TTL trick reliability.** The TTL trick now tries multiple TTL values (3, 5, 8) to cover different DPI placement distances in the network path, instead of only TTL=3. This increases the chance of the fake packet reaching the DPI on varied network topologies.
+- Added 9 new unit tests for TTL trick flag propagation, strategy construction, SNI priority, and host:port parsing. Total: 113 tests.
+- Bumped version to 1.6.0.
 
 ### v1.5.0
 

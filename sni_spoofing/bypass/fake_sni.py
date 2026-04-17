@@ -31,23 +31,25 @@ class FakeSNIBypass(BypassStrategy):
 
     The only reliable way to do this is with raw socket injection
     (out-of-window seq trick). When raw sockets are not available,
-    this falls back to TLS fragmentation which hides the SNI by
-    splitting it across TCP segments.
+    this falls back to the TTL trick (sending a fake ClientHello with
+    low IP TTL) combined with TLS fragmentation.
 
     Methods:
     - "raw_inject" - Inject fake ClientHello with wrong seq number
       via AF_PACKET. DPI sees it, server drops it. (Linux + root)
     - "ttl_trick" - Send fake with low IP TTL. May reach DPI but
-      expire before the server. Unreliable, platform-dependent.
+      expire before the server. Works on macOS, Android, Linux.
     - "fragment_fallback" - Falls back to fragmenting the real
       ClientHello. No fake is sent on the real stream.
     """
 
     name = "fake_sni"
 
-    def __init__(self, method: str = "prefix_fake", raw_injector=None):
+    def __init__(self, method: str = "prefix_fake", raw_injector=None,
+                 use_ttl_trick: bool = False):
         self.method = method
         self.raw_injector = raw_injector
+        self.use_ttl_trick = use_ttl_trick
 
     async def apply(
         self,
@@ -67,12 +69,10 @@ class FakeSNIBypass(BypassStrategy):
                 server_sock, first_data, loop
             )
 
-        # Without raw sockets, the old "prefix_fake" method of sending
-        # a fake ClientHello on the same TCP stream is broken - the server
-        # receives both and the TLS handshake fails. Fall back to
-        # TTL trick if requested, otherwise just fragment the real hello.
-        if self.method == "ttl_trick":
-            return await self._ttl_trick(
+        # Without raw sockets, use TTL trick if enabled (auto-enabled
+        # on macOS/Android/unprivileged Linux), otherwise fragment only.
+        if self.method == "ttl_trick" or self.use_ttl_trick:
+            return await self._ttl_trick_and_fragment(
                 server_sock, fake_sni, first_data, loop
             )
         else:
@@ -114,18 +114,22 @@ class FakeSNIBypass(BypassStrategy):
         except Exception:
             return False
 
-    async def _ttl_trick(
+    async def _ttl_trick_and_fragment(
         self,
         server_sock: socket.socket,
         fake_sni: str,
         first_data: bytes,
         loop,
     ) -> bool:
-        """Send fake ClientHello with low TTL, then real data normally.
+        """Send fake ClientHello with low TTL, then real data fragmented.
 
         The fake packet has a TTL low enough to expire before reaching
         the server, but the DPI middlebox (typically 1-3 hops away)
-        will see it. This is unreliable depending on network topology.
+        will see it. After the fake, the real ClientHello is sent in
+        fragments to further confuse DPI reassembly.
+
+        This is the default fallback on macOS, Android/Termux, and
+        unprivileged Linux where AF_PACKET raw sockets are not available.
         """
         try:
             server_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -137,13 +141,17 @@ class FakeSNIBypass(BypassStrategy):
                 socket.IPPROTO_IP, socket.IP_TTL
             )
 
-            # Low TTL: reaches DPI (1-5 hops) but expires before server
-            server_sock.setsockopt(socket.IPPROTO_IP, socket.IP_TTL, 3)
-
-            try:
-                await loop.sock_sendall(server_sock, fake_hello)
-            except OSError:
-                pass  # May get ICMP TTL exceeded
+            # Try multiple low TTL values for better DPI coverage.
+            # Different networks place DPI at different hop distances.
+            for ttl in (3, 5, 8):
+                try:
+                    server_sock.setsockopt(
+                        socket.IPPROTO_IP, socket.IP_TTL, ttl
+                    )
+                    await loop.sock_sendall(server_sock, fake_hello)
+                    break
+                except OSError:
+                    continue
 
             await asyncio.sleep(0.05)
 
@@ -152,14 +160,31 @@ class FakeSNIBypass(BypassStrategy):
                 socket.IPPROTO_IP, socket.IP_TTL, original_ttl
             )
 
-            # Send real ClientHello normally
-            await loop.sock_sendall(server_sock, first_data)
+            # Now send the real ClientHello fragmented at the SNI boundary
+            fragments = fragment_client_hello(first_data, "sni_split")
+
+            for i, fragment in enumerate(fragments):
+                await loop.sock_sendall(server_sock, fragment)
+                if i < len(fragments) - 1:
+                    await asyncio.sleep(0.1)
 
             server_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 0)
             return True
 
         except Exception:
             return False
+
+    async def _ttl_trick(
+        self,
+        server_sock: socket.socket,
+        fake_sni: str,
+        first_data: bytes,
+        loop,
+    ) -> bool:
+        """Legacy TTL trick: send fake with low TTL then real data normally."""
+        return await self._ttl_trick_and_fragment(
+            server_sock, fake_sni, first_data, loop
+        )
 
     async def _fragment_fallback(
         self,

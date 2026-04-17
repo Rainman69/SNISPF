@@ -402,6 +402,81 @@ class TestUtilities(unittest.TestCase):
         combo = CombinedBypass(raw_injector="mock")
         self.assertEqual(combo.raw_injector, "mock")
 
+    def test_fake_sni_ttl_trick_flag(self):
+        """Test FakeSNIBypass accepts use_ttl_trick parameter."""
+        from sni_spoofing.bypass import FakeSNIBypass
+
+        fake = FakeSNIBypass(use_ttl_trick=True)
+        self.assertTrue(fake.use_ttl_trick)
+        self.assertIsNone(fake.raw_injector)
+
+    def test_fake_sni_ttl_trick_default(self):
+        """Test FakeSNIBypass use_ttl_trick defaults to False."""
+        from sni_spoofing.bypass import FakeSNIBypass
+
+        fake = FakeSNIBypass()
+        self.assertFalse(fake.use_ttl_trick)
+
+    def test_combined_ttl_trick_flag(self):
+        """Test CombinedBypass accepts use_ttl_trick parameter."""
+        from sni_spoofing.bypass import CombinedBypass
+
+        combo = CombinedBypass(use_ttl_trick=True)
+        self.assertTrue(combo.use_ttl_trick)
+
+    def test_build_strategy_fake_sni_with_ttl(self):
+        """Test build_strategy passes USE_TTL_TRICK to FakeSNIBypass."""
+        from sni_spoofing.cli import build_strategy
+
+        config = {"BYPASS_METHOD": "fake_sni", "FAKE_SNI_METHOD": "prefix_fake",
+                  "USE_TTL_TRICK": True}
+        strategy = build_strategy(config)
+        self.assertTrue(strategy.use_ttl_trick)
+
+    def test_build_strategy_combined_with_ttl(self):
+        """Test build_strategy passes USE_TTL_TRICK to CombinedBypass."""
+        from sni_spoofing.cli import build_strategy
+
+        config = {"BYPASS_METHOD": "combined", "FRAGMENT_STRATEGY": "sni_split",
+                  "USE_TTL_TRICK": True, "FRAGMENT_DELAY": 0.1}
+        strategy = build_strategy(config)
+        self.assertTrue(strategy.use_ttl_trick)
+
+    def test_sni_priority_in_provider(self):
+        """Test that explicit SNI is prioritized in SNI provider."""
+        from sni_spoofing.scanner.sni_provider import SNIProvider
+
+        p = SNIProvider(domains=["a.com", "b.com", "c.com"])
+        p.add_domain("user-choice.com")
+        p.mark_success("user-choice.com", latency_ms=1.0)
+        # user-choice.com should be returned as best (lowest latency)
+        self.assertEqual(p.get_best(), "user-choice.com")
+
+
+    def test_parse_host_port_no_port(self):
+        """Test parse_host_port with just an IP (no port)."""
+        from sni_spoofing.cli import parse_host_port
+
+        host, port = parse_host_port("104.19.229.21", "0.0.0.0", 443)
+        self.assertEqual(host, "104.19.229.21")
+        self.assertEqual(port, 443)
+
+    def test_parse_host_port_with_port(self):
+        """Test parse_host_port with IP:PORT format."""
+        from sni_spoofing.cli import parse_host_port
+
+        host, port = parse_host_port("104.19.229.21:8443", "0.0.0.0", 443)
+        self.assertEqual(host, "104.19.229.21")
+        self.assertEqual(port, 8443)
+
+    def test_parse_host_port_port_only(self):
+        """Test parse_host_port with :PORT format."""
+        from sni_spoofing.cli import parse_host_port
+
+        host, port = parse_host_port(":40443", "0.0.0.0", 443)
+        self.assertEqual(host, "0.0.0.0")
+        self.assertEqual(port, 40443)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

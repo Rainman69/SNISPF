@@ -57,7 +57,7 @@ BANNER = r"""
 
      ┌──────────────────────────────────────────────────────────────────┐
      │  SNISPF - Cross-Platform DPI Bypass Tool                        │
-     │  SNI Spoofing + TLS Fragmentation + Auto Scanner                │
+     │  SNI Spoofing + TLS Fragmentation + Auto Scanner  v1.6.0        │
      │  Works on Windows / macOS / Linux                               │
      │  https://github.com/Rainman69/SNISPF                            │
      └──────────────────────────────────────────────────────────────────┘
@@ -190,6 +190,7 @@ def build_strategy(config: dict, raw_injector=None) -> BypassStrategy:
         return FakeSNIBypass(
             method=config.get("FAKE_SNI_METHOD", "prefix_fake"),
             raw_injector=raw_injector,
+            use_ttl_trick=config.get("USE_TTL_TRICK", False),
         )
     elif method == "combined":
         return CombinedBypass(
@@ -473,10 +474,12 @@ def show_platform_info():
         print("  ★ Recommended: combined --ttl-trick")
     else:
         print("  ✓ fragment    - TLS ClientHello fragmentation")
-        print("  ✓ combined    - Fragmentation (fake_sni needs root for seq_id)")
-        print("  ★ Recommended: fragment or combined")
+        print("  ✓ fake_sni    - TTL trick + fragmentation (auto-enabled)")
+        print("  ✓ combined    - TTL trick + fragmentation (recommended)")
+        print("  ★ Recommended: combined (auto-uses TTL trick)")
         if platform.system() != "Windows":
             print("  ℹ  Run with sudo/root for raw injection (seq_id trick)")
+        print("  ℹ  TTL trick is auto-enabled when raw sockets are unavailable")
 
     print("\nScanner:")
     print("  ✓ Cloudflare IP scanner available (no special privileges)")
@@ -684,6 +687,37 @@ def main():
         run_domain_check(args, logger)
         return
 
+    # ── Auto-load config.json if present and no --config given ──────
+    if not args.config:
+        for candidate in ["config.json", "snispf.json"]:
+            if os.path.isfile(candidate):
+                logger.info("Auto-loading config from %s", candidate)
+                user_config = load_config(candidate)
+                # File values are base, CLI flags override
+                for key, val in user_config.items():
+                    if key not in config or config[key] == DEFAULT_CONFIG.get(key):
+                        config[key] = val
+                # Re-apply CLI overrides on top of loaded config
+                if args.listen:
+                    host, port = parse_host_port(args.listen, "0.0.0.0", 40443)
+                    config["LISTEN_HOST"] = host
+                    config["LISTEN_PORT"] = port
+                if args.connect:
+                    host, port = parse_host_port(args.connect, "104.18.38.202", 443)
+                    config["CONNECT_IP"] = host
+                    config["CONNECT_PORT"] = port
+                if args.sni:
+                    config["FAKE_SNI"] = args.sni
+                if args.method:
+                    config["BYPASS_METHOD"] = args.method
+                if args.fragment_strategy:
+                    config["FRAGMENT_STRATEGY"] = args.fragment_strategy
+                if args.fragment_delay is not None:
+                    config["FRAGMENT_DELAY"] = args.fragment_delay
+                if args.ttl_trick:
+                    config["USE_TTL_TRICK"] = True
+                break
+
     # ── Validate config ───────────────────────────────────────────────
     if not is_valid_port(config["LISTEN_PORT"]):
         print(f"Error: Invalid listen port: {config['LISTEN_PORT']}")
@@ -716,6 +750,11 @@ def main():
             sni_domains = config["SNI_DOMAINS"]
 
         sni_provider = SNIProvider(domains=sni_domains)
+
+        # If the user explicitly set --sni, prioritize it in the provider
+        if args.sni:
+            sni_provider.add_domain(config["FAKE_SNI"])
+            sni_provider.mark_success(config["FAKE_SNI"], latency_ms=1.0)
 
         custom_ranges = []
         if args.ip_ranges:
@@ -791,19 +830,26 @@ def main():
             if not raw_injector.start():
                 logger.warning(
                     "Raw injector failed to start. "
-                    "Falling back to fragmentation."
+                    "Enabling TTL trick as fallback."
                 )
                 raw_injector = None
+                config["USE_TTL_TRICK"] = True
         else:
+            # No raw sockets (macOS, Android/Termux, unprivileged Linux).
+            # Auto-enable the TTL trick: sends a fake ClientHello with a
+            # low IP TTL that reaches the nearby DPI middlebox but expires
+            # before the real server.  Works on any platform that supports
+            # setsockopt(IP_TTL).
+            config["USE_TTL_TRICK"] = True
             if method == "fake_sni":
-                logger.warning(
+                logger.info(
                     "Raw sockets not available (need root/CAP_NET_RAW). "
-                    "fake_sni will fall back to fragmentation."
+                    "fake_sni will use TTL trick + fragmentation."
                 )
             elif method == "combined":
                 logger.info(
                     "Raw sockets not available. "
-                    "Using fragmentation-only bypass."
+                    "Using TTL trick + fragmentation bypass."
                 )
 
     # Build bypass strategy

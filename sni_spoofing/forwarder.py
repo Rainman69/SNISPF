@@ -133,7 +133,7 @@ async def handle_connection(
         logger.info(
             f"[{incoming_addr[0]}:{incoming_addr[1]}] -> "
             f"{active_ip}:{connect_port} | SNI: {client_sni} | "
-            f"Fake: {active_sni} | Bypass: {bypass_strategy.name}"
+            f"Fake: {active_sni} | Method: {bypass_strategy.name}"
         )
 
         # Create outgoing socket

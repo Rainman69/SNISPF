@@ -91,22 +91,30 @@ class CombinedBypass(BypassStrategy):
 
             elif self.fake_first and self.use_ttl_trick:
                 # TTL trick: send fake with low TTL so it reaches DPI
-                # but expires before the server
+                # but expires before the server.  This is the default
+                # fallback on macOS, Android/Termux, and unprivileged
+                # Linux where AF_PACKET raw sockets are not available.
                 fake_hello = ClientHelloBuilder.build_client_hello(sni=fake_sni)
                 try:
                     original_ttl = server_sock.getsockopt(
                         socket.IPPROTO_IP, socket.IP_TTL
                     )
-                    server_sock.setsockopt(
-                        socket.IPPROTO_IP, socket.IP_TTL, 3
-                    )
-                    await loop.sock_sendall(server_sock, fake_hello)
+                    # Try multiple TTL values for wider DPI coverage
+                    for ttl in (3, 5, 8):
+                        try:
+                            server_sock.setsockopt(
+                                socket.IPPROTO_IP, socket.IP_TTL, ttl
+                            )
+                            await loop.sock_sendall(server_sock, fake_hello)
+                            break
+                        except OSError:
+                            continue
                     await asyncio.sleep(0.05)
                     server_sock.setsockopt(
                         socket.IPPROTO_IP, socket.IP_TTL, original_ttl
                     )
                 except OSError:
-                    # TTL trick not available, skip the fake entirely
+                    # TTL trick not available on this socket, skip
                     pass
 
                 await asyncio.sleep(0.001)
