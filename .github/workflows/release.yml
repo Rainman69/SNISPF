@@ -21,6 +21,10 @@ jobs:
   binaries:
     name: Binary (${{ matrix.os }} / ${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
+    # Bound the job so that an unavailable runner (e.g. scarce macos-13) cannot
+    # leave the job queued forever and cancel the whole release.
+    timeout-minutes: 30
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -93,8 +97,11 @@ jobs:
   bundles:
     name: Portable bundle (${{ matrix.os }})
     needs: binaries
+    if: always()
     runs-on: ubuntu-latest
+    continue-on-error: true
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: linux
@@ -120,12 +127,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/download-artifact@v4
+      # If the matching binary job was skipped / cancelled / failed, the
+      # artifact will not exist and this step returns an error. We swallow
+      # that gracefully so the rest of the matrix still publishes.
+      - name: Download binary artifact
+        id: dl
+        uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
           name: snispf-${{ matrix.os }}-${{ matrix.arch }}
           path: ./_bin
 
+      - name: Stop if binary is missing
+        if: steps.dl.outcome != 'success'
+        run: |
+          echo "::warning::Binary for ${{ matrix.os }}/${{ matrix.arch }} was not produced; skipping bundle."
+          exit 0
+
       - name: Assemble bundle
+        if: steps.dl.outcome == 'success'
         run: |
           set -eu
           NAME="snispf-${{ matrix.os }}-${{ matrix.arch }}"
@@ -142,14 +162,16 @@ jobs:
           fi
 
       - name: Pack tar.gz
-        if: matrix.archive == 'tar.gz'
+        if: steps.dl.outcome == 'success' && matrix.archive == 'tar.gz'
         run: tar -czf "snispf-${{ matrix.os }}-${{ matrix.arch }}.tar.gz" "snispf-${{ matrix.os }}-${{ matrix.arch }}"
 
       - name: Pack zip
-        if: matrix.archive == 'zip'
+        if: steps.dl.outcome == 'success' && matrix.archive == 'zip'
         run: zip -r "snispf-${{ matrix.os }}-${{ matrix.arch }}.zip" "snispf-${{ matrix.os }}-${{ matrix.arch }}"
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload bundle
+        if: steps.dl.outcome == 'success'
+        uses: actions/upload-artifact@v4
         with:
           name: bundle-${{ matrix.os }}-${{ matrix.arch }}
           path: snispf-${{ matrix.os }}-${{ matrix.arch }}.${{ matrix.archive }}
@@ -178,6 +200,7 @@ jobs:
   docker:
     name: Docker (${{ matrix.flavor }})
     runs-on: ubuntu-latest
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -251,7 +274,10 @@ jobs:
   publish:
     name: Publish GitHub Release
     needs: [binaries, bundles, python-dist, docker]
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Run as long as this is a version tag, even if one of the matrix jobs
+    # above failed / was cancelled (e.g. scarce macos-13 runner). We
+    # publish whatever artifacts we successfully produced.
+    if: always() && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

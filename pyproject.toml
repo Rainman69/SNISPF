@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "snispf"
-version = "1.8.1"
+version = "1.8.2"
 description = "SNISPF - Cross-platform DPI bypass tool via SNI spoofing"
 readme = "README.md"
 license = {text = "MIT"}
