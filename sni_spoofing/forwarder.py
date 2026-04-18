@@ -19,12 +19,18 @@ if the current selection becomes unreachable.
 
 import asyncio
 import logging
-import resource
 import socket
 import sys
 import time
 import traceback
 from typing import Optional
+
+# `resource` is a POSIX-only module (Linux/macOS/BSD). It does not exist on
+# Windows, so we import it defensively and skip the fd-limit tweak there.
+try:
+    import resource  # type: ignore
+except ImportError:  # pragma: no cover -- Windows
+    resource = None  # type: ignore
 
 from .bypass.base import BypassStrategy
 from .tls import ClientHelloBuilder
@@ -54,7 +60,12 @@ def _raise_fd_limit():
     many parallel connections (each needs 2 fds: incoming + outgoing).
     We attempt to raise the soft limit to the hard limit, or at least
     to a reasonable value.
+
+    No-op on Windows, where the `resource` module does not exist and
+    socket count is governed differently.
     """
+    if resource is None:
+        return
     try:
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
         if soft < 4096:

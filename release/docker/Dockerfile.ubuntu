@@ -26,8 +26,7 @@ COPY pyproject.toml ./
 COPY sni_spoofing/ ./sni_spoofing/
 COPY run.py config.json README.md LICENSE ./
 
-RUN python3 -m pip install --break-system-packages --no-cache-dir --upgrade pip \
- && python3 -m pip install --break-system-packages --no-cache-dir .
+RUN python3 -m pip install --break-system-packages --no-cache-dir .
 
 EXPOSE 40443
 
