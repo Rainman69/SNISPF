@@ -1,8 +1,12 @@
 name: Release
 
-# Builds standalone binaries for Linux / macOS / Windows, builds multi-arch
-# Docker images for Alpine / Debian / Ubuntu, and uploads everything to a
-# GitHub Release whenever a tag like `v1.7.0` is pushed.
+# Builds standalone single-file binaries for Linux / macOS / Windows,
+# multi-arch Docker images for Alpine / Debian / Ubuntu, Python wheel + sdist,
+# and portable "extract-and-run" bundles — then attaches everything to a
+# GitHub Release whenever a tag like `v1.9.0` is pushed.
+#
+# Manual dispatch is also supported for dry-run builds (no release is
+# published unless the event is a version tag).
 
 on:
   push:
@@ -14,6 +18,15 @@ permissions:
   contents: write
   packages: write
 
+# One release run at a time per ref — cancel any stale in-progress runs so a
+# partially uploaded artifact from a previous attempt cannot break the new one.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.12"
+
 jobs:
   # ---------------------------------------------------------------------------
   # 1. Standalone single-file binaries (PyInstaller)
@@ -21,8 +34,8 @@ jobs:
   binaries:
     name: Binary (${{ matrix.os }} / ${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
-    # Bound the job so that an unavailable runner (e.g. scarce macos-13) cannot
-    # leave the job queued forever and cancel the whole release.
+    # Bound the job so an unavailable runner cannot leave the matrix queued
+    # forever and cancel the whole release.
     timeout-minutes: 30
     continue-on-error: true
     strategy:
@@ -55,7 +68,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install build deps
         run: |
@@ -90,12 +103,14 @@ jobs:
         with:
           name: snispf-${{ matrix.os }}-${{ matrix.arch }}
           path: dist/snispf-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}
+          if-no-files-found: error
+          retention-days: 7
 
   # ---------------------------------------------------------------------------
   # 2. Portable bundles: binary + launcher + config in a zip / tar.gz
   # ---------------------------------------------------------------------------
   bundles:
-    name: Portable bundle (${{ matrix.os }})
+    name: Portable bundle (${{ matrix.os }} / ${{ matrix.arch }})
     needs: binaries
     if: always()
     runs-on: ubuntu-latest
@@ -175,6 +190,8 @@ jobs:
         with:
           name: bundle-${{ matrix.os }}-${{ matrix.arch }}
           path: snispf-${{ matrix.os }}-${{ matrix.arch }}.${{ matrix.archive }}
+          if-no-files-found: error
+          retention-days: 7
 
   # ---------------------------------------------------------------------------
   # 3. Python wheel + sdist (for PyPI / pipx users)
@@ -186,16 +203,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ env.PYTHON_VERSION }}
       - run: python -m pip install --upgrade pip build
       - run: python -m build
       - uses: actions/upload-artifact@v4
         with:
           name: python-dist
           path: dist/*
+          if-no-files-found: error
+          retention-days: 7
 
   # ---------------------------------------------------------------------------
-  # 4. Docker images: build, push to GHCR, and export as loadable .tar.gz
+  # 4. Docker images: build, push to GHCR, and export as a loadable .tar.gz
   # ---------------------------------------------------------------------------
   docker:
     name: Docker (${{ matrix.flavor }})
@@ -247,6 +266,11 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: ${{ startsWith(github.ref, 'refs/tags/v') }}
           tags: ${{ steps.meta.outputs.tags }}
+          # Disable the provenance / sbom side-artifacts — they get uploaded
+          # as opaque `.dockerbuild` blobs to Actions artifact storage and
+          # break a later `download-artifact` that uses no filter.
+          provenance: false
+          sbom: false
 
       - name: Build local single-arch image for export
         uses: docker/build-push-action@v6
@@ -257,6 +281,8 @@ jobs:
           push: false
           load: true
           tags: snispf:${{ matrix.flavor }}
+          provenance: false
+          sbom: false
 
       - name: Export image as loadable archive
         run: |
@@ -267,6 +293,8 @@ jobs:
         with:
           name: docker-${{ matrix.flavor }}
           path: snispf-${{ matrix.flavor }}.tar.gz
+          if-no-files-found: error
+          retention-days: 7
 
   # ---------------------------------------------------------------------------
   # 5. Publish a GitHub Release with every artifact
@@ -275,27 +303,56 @@ jobs:
     name: Publish GitHub Release
     needs: [binaries, bundles, python-dist, docker]
     # Run as long as this is a version tag, even if one of the matrix jobs
-    # above failed / was cancelled (e.g. scarce macos-13 runner). We
-    # publish whatever artifacts we successfully produced.
+    # above failed / was cancelled (e.g. scarce macos-13 runner). We publish
+    # whatever artifacts we successfully produced.
     if: always() && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/download-artifact@v4
+      # Download ONLY the artifacts we explicitly produced — any external
+      # `.dockerbuild` provenance blobs that might have leaked in are
+      # filtered out by the name patterns below.
+      - name: Download binary artifacts
+        uses: actions/download-artifact@v4
         with:
-          path: ./_artifacts
+          path: ./_artifacts/binaries
+          pattern: "snispf-*"
+          merge-multiple: true
+
+      - name: Download bundle artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./_artifacts/bundles
+          pattern: "bundle-*"
+          merge-multiple: true
+
+      - name: Download docker artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./_artifacts/docker
+          pattern: "docker-*"
+          merge-multiple: true
+
+      - name: Download python-dist artifact
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: python-dist
+          path: ./_artifacts/python
 
       - name: Flatten artifacts
         run: |
           mkdir -p release_files
           find ./_artifacts -type f -exec cp {} release_files/ \;
-          ls -lh release_files/
+          echo "--- release_files ---"
+          ls -lh release_files/ || true
 
       - name: Generate checksums
         run: |
           cd release_files
           sha256sum * > SHA256SUMS.txt
+          echo "--- SHA256SUMS.txt ---"
           cat SHA256SUMS.txt
 
       - name: Create GitHub Release
@@ -303,6 +360,7 @@ jobs:
         with:
           files: release_files/*
           generate_release_notes: true
+          fail_on_unmatched_files: false
           body: |
             ## SNISPF ${{ github.ref_name }}
 
@@ -310,20 +368,24 @@ jobs:
             Pick whichever is easiest for you — see `release/README.md` in the
             repo for full instructions.
 
-            **Standalone binaries** (no Python needed)
+            **Standalone binaries** (no Python needed — just download and run)
             - `snispf-linux-x86_64`, `snispf-linux-arm64`
             - `snispf-darwin-x86_64`, `snispf-darwin-arm64`
             - `snispf-windows-x86_64.exe`
 
-            **Portable bundles** (binary + launcher + config in one archive)
+            **Portable bundles** (binary + launcher + default config in one archive)
             - `snispf-linux-*.tar.gz`, `snispf-darwin-*.tar.gz`, `snispf-windows-x86_64.zip`
 
-            **Docker images** (just `docker load` and run, no build needed)
-            - `snispf-alpine.tar.gz`  (~60 MB, smallest)
-            - `snispf-debian.tar.gz`  (best compatibility)
-            - `snispf-ubuntu.tar.gz`  (familiar environment)
+            **Docker images** (zero install — just `docker load` and run)
+            - `snispf-alpine.tar.gz`  (~60 MB, smallest, musl)
+            - `snispf-debian.tar.gz`  (best compatibility, glibc)
+            - `snispf-ubuntu.tar.gz`  (familiar Ubuntu environment)
 
-            **Python packages**
+            Also published to GHCR:
+            - `ghcr.io/rainman69/snispf:latest`  (debian, multi-arch)
+            - `ghcr.io/rainman69/snispf:alpine`, `:debian`, `:ubuntu`
+
+            **Python packages** (pip / pipx)
             - `snispf-*.whl`, `snispf-*.tar.gz`
 
-            All files are listed in `SHA256SUMS.txt`.
+            All checksums are in `SHA256SUMS.txt`.

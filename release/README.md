@@ -159,20 +159,38 @@ trick works without running as full root, and uses
 
 ## 6. Cutting a release
 
-1. Bump the version in `pyproject.toml` and `sni_spoofing/__init__.py`.
-2. Commit and tag:
+1. Bump the version in `pyproject.toml` and `sni_spoofing/__init__.py`
+   (keep them in sync).
+2. Commit on `main`, then tag and push:
    ```bash
-   git tag v1.7.0
+   git commit -am "release: v1.9.0"
+   git tag v1.9.0
    git push origin main --tags
    ```
 3. The `Release` workflow automatically:
    - builds 5 standalone binaries (Linux x64/arm64, macOS x64/arm64, Win x64),
-   - builds 5 portable bundles,
+   - builds 5 portable bundles (binary + launcher + config, tar.gz or zip),
    - builds Python wheel + sdist,
-   - builds & pushes 3 multi-arch Docker images to GHCR,
+   - builds & pushes 3 multi-arch Docker images to GHCR
+     (`alpine` / `debian` / `ubuntu`, `linux/amd64` + `linux/arm64`),
    - exports each Docker image as a loadable `.tar.gz`,
    - generates `SHA256SUMS.txt`,
-   - publishes a GitHub Release with every artifact attached.
+   - publishes a GitHub Release with every artifact attached and
+     auto-generated release notes.
 
-No further manual work is required — the user just downloads whichever
-file they prefer from the Releases page.
+No further manual work is required — end users just pick whichever file
+they prefer from the Releases page.
+
+### Re-running a release
+
+If the workflow fails only at the "Publish" step (rare, but possible if
+GitHub artifact storage hiccups), you can re-run **just the Publish job**
+from the Actions tab — all previously built artifacts are reused, no
+rebuild is needed.
+
+### Dry-run / manual dispatch
+
+You can also trigger the workflow manually from the Actions tab using
+"Run workflow" on any branch. In that case, every job runs (so you can
+verify the build is green) but **no GitHub Release is published** — the
+publish step only fires for version tags (`refs/tags/v*`).
