@@ -50,10 +50,12 @@ jobs:
             arch: arm64
             runner: ubuntu-24.04-arm
             ext: ""
-          - os: darwin
-            arch: x86_64
-            runner: macos-13
-            ext: ""
+          # macOS Intel (x86_64): we no longer schedule a dedicated macos-13
+          # runner here — those runners are scarce on free tier and regularly
+          # sit queued for hours, blocking the whole release. Intel Macs can
+          # still run the arm64 binary via Rosetta 2, and anyone who really
+          # needs a native Intel build can run `release/scripts/build_binary.sh`
+          # locally (it auto-detects the host arch).
           - os: darwin
             arch: arm64
             runner: macos-14
@@ -127,10 +129,9 @@ jobs:
             arch: arm64
             ext: ""
             archive: tar.gz
-          - os: darwin
-            arch: x86_64
-            ext: ""
-            archive: tar.gz
+          # darwin/x86_64 binary is not built in CI (see note above); if you
+          # need a bundle for Intel macOS, build the binary locally with
+          # release/scripts/build_binary.sh and assemble by hand.
           - os: darwin
             arch: arm64
             ext: ""
@@ -370,11 +371,12 @@ jobs:
 
             **Standalone binaries** (no Python needed — just download and run)
             - `snispf-linux-x86_64`, `snispf-linux-arm64`
-            - `snispf-darwin-x86_64`, `snispf-darwin-arm64`
+            - `snispf-darwin-arm64` (Apple Silicon; Intel Macs can run it
+              under Rosetta 2 or build natively via `release/scripts/build_binary.sh`)
             - `snispf-windows-x86_64.exe`
 
             **Portable bundles** (binary + launcher + default config in one archive)
-            - `snispf-linux-*.tar.gz`, `snispf-darwin-*.tar.gz`, `snispf-windows-x86_64.zip`
+            - `snispf-linux-*.tar.gz`, `snispf-darwin-arm64.tar.gz`, `snispf-windows-x86_64.zip`
 
             **Docker images** (zero install — just `docker load` and run)
             - `snispf-alpine.tar.gz`  (~60 MB, smallest, musl)
