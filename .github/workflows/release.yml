@@ -1,0 +1,303 @@
+name: Release
+
+# Builds standalone binaries for Linux / macOS / Windows, builds multi-arch
+# Docker images for Alpine / Debian / Ubuntu, and uploads everything to a
+# GitHub Release whenever a tag like `v1.7.0` is pushed.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Standalone single-file binaries (PyInstaller)
+  # ---------------------------------------------------------------------------
+  binaries:
+    name: Binary (${{ matrix.os }} / ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            arch: x86_64
+            runner: ubuntu-latest
+            ext: ""
+          - os: linux
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            ext: ""
+          - os: darwin
+            arch: x86_64
+            runner: macos-13
+            ext: ""
+          - os: darwin
+            arch: arm64
+            runner: macos-14
+            ext: ""
+          - os: windows
+            arch: x86_64
+            runner: windows-latest
+            ext: ".exe"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build deps
+        run: |
+          python -m pip install --upgrade pip wheel pyinstaller
+          python -m pip install .
+
+      - name: Build (Linux/macOS)
+        if: matrix.os != 'windows'
+        run: |
+          python -m PyInstaller --onefile --console --clean --noconfirm \
+              --name "snispf-${{ matrix.os }}-${{ matrix.arch }}" \
+              --collect-all sni_spoofing \
+              --add-data "config.json:." \
+              run.py
+
+      - name: Build (Windows)
+        if: matrix.os == 'windows'
+        run: |
+          python -m PyInstaller --onefile --console --clean --noconfirm `
+              --name "snispf-windows-${{ matrix.arch }}" `
+              --collect-all sni_spoofing `
+              --add-data "config.json;." `
+              run.py
+
+      - name: Smoke test
+        shell: bash
+        run: |
+          ./dist/snispf-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }} --version || true
+          ./dist/snispf-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }} --help | head -n 5
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: snispf-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/snispf-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}
+
+  # ---------------------------------------------------------------------------
+  # 2. Portable bundles: binary + launcher + config in a zip / tar.gz
+  # ---------------------------------------------------------------------------
+  bundles:
+    name: Portable bundle (${{ matrix.os }})
+    needs: binaries
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - os: linux
+            arch: x86_64
+            ext: ""
+            archive: tar.gz
+          - os: linux
+            arch: arm64
+            ext: ""
+            archive: tar.gz
+          - os: darwin
+            arch: x86_64
+            ext: ""
+            archive: tar.gz
+          - os: darwin
+            arch: arm64
+            ext: ""
+            archive: tar.gz
+          - os: windows
+            arch: x86_64
+            ext: ".exe"
+            archive: zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: snispf-${{ matrix.os }}-${{ matrix.arch }}
+          path: ./_bin
+
+      - name: Assemble bundle
+        run: |
+          set -eu
+          NAME="snispf-${{ matrix.os }}-${{ matrix.arch }}"
+          DIR="snispf-${{ matrix.os }}-${{ matrix.arch }}"
+          mkdir -p "$DIR"
+          cp "_bin/${NAME}${{ matrix.ext }}" "$DIR/"
+          chmod +x "$DIR/${NAME}${{ matrix.ext }}" || true
+          cp config.json README.md LICENSE "$DIR/"
+          if [ "${{ matrix.os }}" = "windows" ]; then
+            cp release/scripts/snispf.bat release/scripts/snispf.ps1 "$DIR/"
+          else
+            cp release/scripts/snispf.sh "$DIR/"
+            chmod +x "$DIR/snispf.sh"
+          fi
+
+      - name: Pack tar.gz
+        if: matrix.archive == 'tar.gz'
+        run: tar -czf "snispf-${{ matrix.os }}-${{ matrix.arch }}.tar.gz" "snispf-${{ matrix.os }}-${{ matrix.arch }}"
+
+      - name: Pack zip
+        if: matrix.archive == 'zip'
+        run: zip -r "snispf-${{ matrix.os }}-${{ matrix.arch }}.zip" "snispf-${{ matrix.os }}-${{ matrix.arch }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.os }}-${{ matrix.arch }}
+          path: snispf-${{ matrix.os }}-${{ matrix.arch }}.${{ matrix.archive }}
+
+  # ---------------------------------------------------------------------------
+  # 3. Python wheel + sdist (for PyPI / pipx users)
+  # ---------------------------------------------------------------------------
+  python-dist:
+    name: Python wheel & sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip build
+      - run: python -m build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-dist
+          path: dist/*
+
+  # ---------------------------------------------------------------------------
+  # 4. Docker images: build, push to GHCR, and export as loadable .tar.gz
+  # ---------------------------------------------------------------------------
+  docker:
+    name: Docker (${{ matrix.flavor }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - flavor: alpine
+            file: release/docker/Dockerfile.alpine
+          - flavor: debian
+            file: release/docker/Dockerfile.debian
+          - flavor: ubuntu
+            file: release/docker/Dockerfile.ubuntu
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute tags
+        id: meta
+        run: |
+          OWNER_LC="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          REF="${GITHUB_REF_NAME}"
+          IMG="ghcr.io/${OWNER_LC}/snispf"
+          if [ "${{ matrix.flavor }}" = "debian" ]; then
+            TAGS="${IMG}:${REF},${IMG}:latest,${IMG}:${{ matrix.flavor }},${IMG}:${REF}-${{ matrix.flavor }}"
+          else
+            TAGS="${IMG}:${{ matrix.flavor }},${IMG}:${REF}-${{ matrix.flavor }}"
+          fi
+          echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
+          echo "image=$IMG" >> "$GITHUB_OUTPUT"
+
+      - name: Build & push (multi-arch)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          platforms: linux/amd64,linux/arm64
+          push: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          tags: ${{ steps.meta.outputs.tags }}
+
+      - name: Build local single-arch image for export
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: snispf:${{ matrix.flavor }}
+
+      - name: Export image as loadable archive
+        run: |
+          docker save snispf:${{ matrix.flavor }} | gzip > "snispf-${{ matrix.flavor }}.tar.gz"
+          ls -lh "snispf-${{ matrix.flavor }}.tar.gz"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docker-${{ matrix.flavor }}
+          path: snispf-${{ matrix.flavor }}.tar.gz
+
+  # ---------------------------------------------------------------------------
+  # 5. Publish a GitHub Release with every artifact
+  # ---------------------------------------------------------------------------
+  publish:
+    name: Publish GitHub Release
+    needs: [binaries, bundles, python-dist, docker]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: ./_artifacts
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p release_files
+          find ./_artifacts -type f -exec cp {} release_files/ \;
+          ls -lh release_files/
+
+      - name: Generate checksums
+        run: |
+          cd release_files
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release_files/*
+          generate_release_notes: true
+          body: |
+            ## SNISPF ${{ github.ref_name }}
+
+            Pre-built artifacts for every supported platform are attached below.
+            Pick whichever is easiest for you — see `release/README.md` in the
+            repo for full instructions.
+
+            **Standalone binaries** (no Python needed)
+            - `snispf-linux-x86_64`, `snispf-linux-arm64`
+            - `snispf-darwin-x86_64`, `snispf-darwin-arm64`
+            - `snispf-windows-x86_64.exe`
+
+            **Portable bundles** (binary + launcher + config in one archive)
+            - `snispf-linux-*.tar.gz`, `snispf-darwin-*.tar.gz`, `snispf-windows-x86_64.zip`
+
+            **Docker images** (just `docker load` and run, no build needed)
+            - `snispf-alpine.tar.gz`  (~60 MB, smallest)
+            - `snispf-debian.tar.gz`  (best compatibility)
+            - `snispf-ubuntu.tar.gz`  (familiar environment)
+
+            **Python packages**
+            - `snispf-*.whl`, `snispf-*.tar.gz`
+
+            All files are listed in `SHA256SUMS.txt`.

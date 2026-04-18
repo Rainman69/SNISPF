@@ -1,0 +1,29 @@
+# SNISPF - Debian-slim image (best compatibility for glibc-based hosts)
+# Build:   docker build -f release/docker/Dockerfile.debian -t snispf:debian .
+# Save:    docker save snispf:debian | gzip > snispf-debian.tar.gz
+# Load:    gunzip -c snispf-debian.tar.gz | docker load
+# Run:     docker run --rm -p 40443:40443 snispf:debian
+
+FROM python:3.12-slim-bookworm
+
+LABEL maintainer="Rainman69"
+LABEL description="SNISPF - Cross-platform DPI bypass tool (Debian)"
+LABEL org.opencontainers.image.source="https://github.com/Rainman69/SNISPF"
+
+WORKDIR /app
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates tzdata \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml ./
+COPY sni_spoofing/ ./sni_spoofing/
+COPY run.py config.json README.md LICENSE ./
+
+RUN pip install --no-cache-dir --upgrade pip \
+ && pip install --no-cache-dir .
+
+EXPOSE 40443
+
+ENTRYPOINT ["snispf"]
+CMD ["--config", "/app/config.json"]

@@ -1,0 +1,39 @@
+# SNISPF - Windows Server Core image (for Windows container hosts)
+# Build:   docker build -f release/docker/Dockerfile.windows -t snispf:windows .
+# Save:    docker save snispf:windows -o snispf-windows.tar
+# Load:    docker load -i snispf-windows.tar
+# Run:     docker run --rm -p 40443:40443 snispf:windows
+#
+# NOTE: requires a Windows container host (Windows 10/11 or Windows Server
+# with Docker in Windows-container mode).
+
+# escape=`
+FROM mcr.microsoft.com/windows/servercore:ltsc2022
+
+LABEL maintainer="Rainman69"
+LABEL description="SNISPF - Cross-platform DPI bypass tool (Windows)"
+LABEL org.opencontainers.image.source="https://github.com/Rainman69/SNISPF"
+
+SHELL ["powershell", "-NoProfile", "-Command", "$ErrorActionPreference='Stop';"]
+
+# Install Python 3.12 silently
+RUN Invoke-WebRequest -Uri https://www.python.org/ftp/python/3.12.7/python-3.12.7-amd64.exe -OutFile python.exe ; `
+    Start-Process -FilePath python.exe -ArgumentList '/quiet','InstallAllUsers=1','PrependPath=1','Include_pip=1' -Wait ; `
+    Remove-Item python.exe
+
+WORKDIR C:/app
+
+COPY pyproject.toml .
+COPY sni_spoofing/ ./sni_spoofing/
+COPY run.py .
+COPY config.json .
+COPY README.md .
+COPY LICENSE .
+
+RUN python -m pip install --upgrade pip ; `
+    python -m pip install .
+
+EXPOSE 40443
+
+ENTRYPOINT ["snispf"]
+CMD ["--config", "C:/app/config.json"]

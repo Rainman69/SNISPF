@@ -1,0 +1,28 @@
+# SNISPF - one-file docker-compose stack
+#
+# Quick start (zero installation, just Docker required):
+#   1. Drop this file (and optionally a config.json) into a folder.
+#   2. Run:  docker compose up -d
+#   3. Point your client at  127.0.0.1:40443
+#
+# To use a custom config, place a `config.json` next to this file, then
+# uncomment the volumes section below.
+
+services:
+  snispf:
+    image: ghcr.io/rainman69/snispf:latest
+    container_name: snispf
+    restart: unless-stopped
+    network_mode: "host"        # needed for raw-socket / TTL tricks on Linux
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    # ports: ['40443:40443']    # use this instead of host networking on macOS/Win
+    # volumes:
+    #   - ./config.json:/app/config.json:ro
+    command: ["--config", "/app/config.json"]
+    healthcheck:
+      test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 40443 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

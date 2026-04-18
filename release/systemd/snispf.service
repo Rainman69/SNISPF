@@ -1,0 +1,33 @@
+# SNISPF systemd unit (Linux).
+#
+# Install:
+#   sudo cp release/systemd/snispf.service /etc/systemd/system/snispf.service
+#   sudo cp config.json /etc/snispf/config.json     # adjust to taste
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now snispf
+#
+# Logs:    journalctl -u snispf -f
+# Status:  systemctl status snispf
+
+[Unit]
+Description=SNISPF - DPI bypass via SNI spoofing
+Documentation=https://github.com/Rainman69/SNISPF
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/snispf --config /etc/snispf/config.json
+Restart=on-failure
+RestartSec=3
+# Allow raw sockets for the seq_id trick without running fully as root
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/log /var/lib/snispf
+
+[Install]
+WantedBy=multi-user.target

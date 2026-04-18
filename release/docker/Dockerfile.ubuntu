@@ -1,0 +1,35 @@
+# SNISPF - Ubuntu image (familiar environment, larger size)
+# Build:   docker build -f release/docker/Dockerfile.ubuntu -t snispf:ubuntu .
+# Save:    docker save snispf:ubuntu | gzip > snispf-ubuntu.tar.gz
+# Load:    gunzip -c snispf-ubuntu.tar.gz | docker load
+# Run:     docker run --rm -p 40443:40443 snispf:ubuntu
+
+FROM ubuntu:24.04
+
+LABEL maintainer="Rainman69"
+LABEL description="SNISPF - Cross-platform DPI bypass tool (Ubuntu)"
+LABEL org.opencontainers.image.source="https://github.com/Rainman69/SNISPF"
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /app
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      python3 python3-pip python3-venv ca-certificates tzdata \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml ./
+COPY sni_spoofing/ ./sni_spoofing/
+COPY run.py config.json README.md LICENSE ./
+
+RUN python3 -m pip install --break-system-packages --no-cache-dir --upgrade pip \
+ && python3 -m pip install --break-system-packages --no-cache-dir .
+
+EXPOSE 40443
+
+ENTRYPOINT ["snispf"]
+CMD ["--config", "/app/config.json"]

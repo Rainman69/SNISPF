@@ -24,10 +24,13 @@
 - [How Does It Work?](#how-does-it-work)
 - [Requirements](#requirements)
 - [Installation](#installation)
-  - [Method 1: pip install (Recommended)](#method-1-pip-install-recommended)
-  - [Method 2: Run directly without installing](#method-2-run-directly-without-installing)
-  - [Method 3: Clone from source](#method-3-clone-from-source)
-  - [Method 4: Docker](#method-4-docker)
+  - [Method 1: Pre-built binary (no Python needed)](#method-1-pre-built-binary-no-python-needed)
+  - [Method 2: One-line installer](#method-2-one-line-installer)
+  - [Method 3: Docker (zero install)](#method-3-docker-zero-install)
+  - [Method 4: Docker Compose](#method-4-docker-compose)
+  - [Method 5: pip install](#method-5-pip-install)
+  - [Method 6: Run directly from source](#method-6-run-directly-from-source)
+  - [Method 7: systemd service (Linux)](#method-7-systemd-service-linux)
 - [Quick Start Guide](#quick-start-guide)
   - [Step 1: Start the tool](#step-1-start-the-tool)
   - [Step 2: Point your app at it](#step-2-point-your-app-at-it)
@@ -118,23 +121,138 @@ If you don't have Python yet:
 
 ## Installation
 
-### Method 1: pip install (Recommended)
+Pick whichever option fits you best. Methods 1–4 require **no Python and no
+build tools at all** — just download a file and run it. See
+[`release/README.md`](./release/README.md) for the maintainer-side build
+recipes.
 
-This installs the `snispf` command system-wide:
+### Method 1: Pre-built binary (no Python needed)
+
+Every tagged release ships a single self-contained executable for each
+platform on the [Releases page](https://github.com/Rainman69/SNISPF/releases/latest):
+
+| OS | File |
+|---|---|
+| Linux x86_64 | `snispf-linux-x86_64` |
+| Linux arm64 | `snispf-linux-arm64` |
+| macOS Intel | `snispf-darwin-x86_64` |
+| macOS Apple Silicon | `snispf-darwin-arm64` |
+| Windows x64 | `snispf-windows-x86_64.exe` |
+
+Or download a **portable bundle** (`snispf-<os>-<arch>.tar.gz` / `.zip`) that
+includes the binary, a default `config.json`, and a double-clickable
+launcher script (`snispf.sh` / `snispf.bat` / `snispf.ps1`).
 
 ```bash
-git clone https://github.com/Rainman69/SNISPF.git
-cd SNISPF
-pip install .
+# Linux / macOS
+chmod +x snispf-linux-x86_64
+./snispf-linux-x86_64 --auto
+
+# Windows (cmd or PowerShell)
+.\snispf-windows-x86_64.exe --auto
 ```
 
-Now you can run it from anywhere:
+Verify any download with the published `SHA256SUMS.txt`:
+
+```bash
+sha256sum -c SHA256SUMS.txt --ignore-missing
+```
+
+### Method 2: One-line installer
+
+Downloads the right binary for your OS/arch, drops a default `config.json`,
+and adds it to your `PATH`.
+
+```bash
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/Rainman69/SNISPF/main/release/scripts/install.sh | bash
+```
+
+```powershell
+# Windows (PowerShell)
+iwr -useb https://raw.githubusercontent.com/Rainman69/SNISPF/main/release/scripts/install.ps1 | iex
+```
+
+After install:
 
 ```bash
 snispf --help
 ```
 
-### Method 2: Run directly without installing
+### Method 3: Docker (zero install)
+
+The cleanest "just works on every OS" option. Three flavors are published to
+GHCR and also attached as loadable `.tar.gz` images on every release.
+
+**Option A — pull from the registry (needs internet on the user's machine):**
+
+```bash
+docker run --rm -p 40443:40443 ghcr.io/rainman69/snispf:latest          # debian (default)
+docker run --rm -p 40443:40443 ghcr.io/rainman69/snispf:alpine          # smallest, ~60 MB
+docker run --rm -p 40443:40443 ghcr.io/rainman69/snispf:ubuntu          # familiar Ubuntu
+```
+
+**Option B — fully offline: hand the user a single `.tar.gz` file.**
+They don't need git, Python, or even internet access — only Docker.
+
+```bash
+# 1. Download snispf-alpine.tar.gz (or -debian / -ubuntu) from Releases
+# 2. Load it as an image
+gunzip -c snispf-alpine.tar.gz | docker load
+
+# 3. Run
+docker run --rm -p 40443:40443 snispf:alpine
+```
+
+To use a custom config:
+
+```bash
+docker run --rm -p 40443:40443 \
+  -v "$PWD/config.json:/app/config.json:ro" \
+  snispf:alpine
+```
+
+| Tag | Base | Size |
+|---|---|---|
+| `:alpine` | `python:3.12-alpine` | ~60 MB |
+| `:debian` / `:latest` | `python:3.12-slim-bookworm` | ~140 MB |
+| `:ubuntu` | `ubuntu:24.04` | ~250 MB |
+| `:windows`* | `windows/servercore:ltsc2022` | ~5 GB |
+
+*Windows image requires a Windows container host.*
+
+### Method 4: Docker Compose
+
+Drop [`release/docker/docker-compose.yml`](./release/docker/docker-compose.yml)
+into a folder (optionally next to your own `config.json`) and run:
+
+```bash
+docker compose up -d
+```
+
+That's it — the proxy listens on `127.0.0.1:40443` and restarts
+automatically.
+
+### Method 5: pip install
+
+This installs the `snispf` command into your Python environment:
+
+```bash
+git clone https://github.com/Rainman69/SNISPF.git
+cd SNISPF
+pip install .
+snispf --help
+```
+
+Or, once a wheel is published:
+
+```bash
+pip install snispf
+# or, isolated:
+pipx install snispf
+```
+
+### Method 6: Run directly from source
 
 No install needed. Just clone and run:
 
@@ -142,25 +260,47 @@ No install needed. Just clone and run:
 git clone https://github.com/Rainman69/SNISPF.git
 cd SNISPF
 python run.py --help
-```
-
-### Method 3: Clone from source
-
-If you want to run it as a Python module:
-
-```bash
-git clone https://github.com/Rainman69/SNISPF.git
-cd SNISPF
+# or
 python -m sni_spoofing.cli --help
 ```
 
-### Method 4: Docker
+### Method 7: systemd service (Linux)
+
+After installing the binary (Method 1 or 2), enable the bundled unit so
+SNISPF starts at boot and restarts on failure:
 
 ```bash
-git clone https://github.com/Rainman69/SNISPF.git
-cd SNISPF
-docker build -t snispf .
-docker run --rm -p 40443:40443 snispf
+sudo cp release/systemd/snispf.service /etc/systemd/system/snispf.service
+sudo mkdir -p /etc/snispf && sudo cp config.json /etc/snispf/config.json
+sudo systemctl daemon-reload
+sudo systemctl enable --now snispf
+journalctl -u snispf -f
+```
+
+The unit grants only the `CAP_NET_RAW` and `CAP_NET_ADMIN` capabilities,
+so the seq_id raw-packet trick works without giving SNISPF full root.
+
+### Building the binary yourself
+
+If you'd rather not trust a pre-built file, you can produce the same
+single-file binary locally:
+
+```bash
+# Linux / macOS
+bash release/scripts/build_binary.sh
+# → dist/snispf-<os>-<arch>
+
+# Windows (PowerShell)
+.\release\scripts\build_binary.ps1
+# → dist\snispf-windows-x86_64.exe
+```
+
+You can also build any Docker flavor manually:
+
+```bash
+docker build -f release/docker/Dockerfile.alpine -t snispf:alpine .
+docker build -f release/docker/Dockerfile.debian -t snispf:debian .
+docker build -f release/docker/Dockerfile.ubuntu -t snispf:ubuntu .
 ```
 
 ---

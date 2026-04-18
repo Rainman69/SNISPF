@@ -1,0 +1,31 @@
+# SNISPF - Alpine-based image (smallest footprint, ~60 MB)
+# Build:   docker build -f release/docker/Dockerfile.alpine -t snispf:alpine .
+# Save:    docker save snispf:alpine | gzip > snispf-alpine.tar.gz
+# Load:    gunzip -c snispf-alpine.tar.gz | docker load
+# Run:     docker run --rm -p 40443:40443 snispf:alpine
+
+FROM python:3.12-alpine
+
+LABEL maintainer="Rainman69"
+LABEL description="SNISPF - Cross-platform DPI bypass tool (Alpine)"
+LABEL org.opencontainers.image.source="https://github.com/Rainman69/SNISPF"
+
+WORKDIR /app
+
+# Alpine needs build deps to compile any C extensions, then we drop them.
+RUN apk add --no-cache --virtual .build-deps gcc musl-dev libffi-dev \
+ && apk add --no-cache ca-certificates tzdata
+
+COPY pyproject.toml ./
+COPY sni_spoofing/ ./sni_spoofing/
+COPY run.py config.json README.md LICENSE ./
+
+RUN pip install --no-cache-dir --upgrade pip \
+ && pip install --no-cache-dir . \
+ && apk del .build-deps \
+ && rm -rf /root/.cache /tmp/*
+
+EXPOSE 40443
+
+ENTRYPOINT ["snispf"]
+CMD ["--config", "/app/config.json"]
