@@ -14,7 +14,9 @@
 
 **SNISPF** is a lightweight command-line tool that helps you get past internet censorship. It works by messing with the way your connection introduces itself to firewalls, so filtered websites slip through undetected. Runs on **Windows, macOS, and Linux** -- no drivers, no admin rights needed for most features.
 
-**New in v1.6.0:** Fixed `fake_sni` and `combined` methods on macOS and Android/Termux -- they now auto-enable the TTL trick when raw sockets are unavailable, so these bypass methods actually work without root on all platforms. Fixed `--sni` flag being ignored when auto mode is active. Fixed `config.json` not being auto-loaded from the current directory. Inspired by community scanners (GoodbyeDPI, ByeDPI, Zapret, SNI-Spoofing).
+**New in v1.8.0:** Full multi-platform release pipeline is now live. Every tagged release automatically publishes **standalone single-file binaries** (Linux x86_64 / arm64, macOS Intel / Apple Silicon, Windows x64), **portable bundles** (binary + launcher + config in one archive), **loadable Docker image tarballs** for Alpine / Debian / Ubuntu (just `docker load` — no build, no internet, no pip), a Windows Docker image, multi-arch images on GHCR, a Python wheel + sdist, one-line installers for Linux/macOS/Windows, and a `systemd` service file. Grab anything you want from the [Releases page](https://github.com/Rainman69/SNISPF/releases/latest) — see [Installation](#installation) below.
+
+**Previously in v1.6.0:** Fixed `fake_sni` and `combined` methods on macOS and Android/Termux -- they now auto-enable the TTL trick when raw sockets are unavailable, so these bypass methods actually work without root on all platforms. Fixed `--sni` flag being ignored when auto mode is active. Fixed `config.json` not being auto-loaded from the current directory. Inspired by community scanners (GoodbyeDPI, ByeDPI, Zapret, SNI-Spoofing).
 
 **Maintained by [@Rainman69](https://github.com/Rainman69)**
 ---
