@@ -1,6 +1,6 @@
 # SNISPF
 
-### Cross-Platform DPI Bypass Tool with Automatic IP Scanner
+### Cross-Platform DPI Bypass Tool
 
 ```
  ███████╗███╗   ██╗██╗███████╗██████╗ ███████╗
